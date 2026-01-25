@@ -140,7 +140,7 @@ class _IntroText extends StatelessWidget {
     );
     final lines = <_IntroLine>[
       const _IntroLine('우리는 가끔 내 삶의 목적을 고민합니다.'),
-      const _IntroLine('하지만 태어났다는 것만으로 이미 목적은 이루어졌습니다.'),
+      const _IntroLine('하지만 태어난 것만으로 이미 목적은 이뤘습니다.'),
       const _IntroLine('그럼 지금 이 시간은 무엇일까요?'),
       const _IntroLine(
         '신이 우리를 예뻐해서 주신 보너스 게임입니다.',
@@ -148,11 +148,12 @@ class _IntroText extends StatelessWidget {
       ),
       const _IntroLine(
         '지나온 시간을 기록하고 남은 보너스 게임을 즐겁게 설계해 보세요!',
+        emphasize: true,
       ),
     ];
     return LayoutBuilder(
       builder: (context, constraints) {
-        const lineStep = 46.0;
+        const lineStep = 56.0;
         const baseLineHeight = 26.0;
         final centerY = constraints.maxHeight / 2;
         return SizedBox(
@@ -161,7 +162,7 @@ class _IntroText extends StatelessWidget {
             children: List.generate(lines.length, (index) {
               final line = lines[index];
               final isVisible = visibleLines > index;
-              final duration = line.highlight
+              final duration = (line.highlight || line.emphasize)
                   ? const Duration(milliseconds: 2500)
                   : const Duration(seconds: 2);
               final targetY = centerY +
@@ -183,15 +184,25 @@ class _IntroText extends StatelessWidget {
                         ? (line.highlight ? 1.06 : 1)
                         : (line.highlight ? 0.95 : 1),
                     curve: Curves.easeOut,
-                    child: Text(
-                      line.text,
-                      textAlign: TextAlign.center,
-                      style: baseStyle.copyWith(
-                        fontSize: line.highlight ? 16 : 14,
-                        color: line.highlight ? const Color(0xFFFF6B7A) : null,
-                        fontWeight: line.highlight
-                            ? FontWeight.w700
-                            : FontWeight.w500,
+                    alignment: Alignment.centerLeft,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        line.text,
+                        textAlign: TextAlign.left,
+                        style: baseStyle.copyWith(
+                          fontSize: line.highlight ? 16 : 14,
+                          color: line.highlight
+                              ? const Color(0xFFFF6B7A)
+                              : (line.emphasize
+                                  ? const Color(0xFF4E4E4E)
+                                  : null),
+                          fontWeight: line.highlight
+                              ? FontWeight.w700
+                              : (line.emphasize
+                                  ? FontWeight.w600
+                                  : FontWeight.w500),
+                        ),
                       ),
                     ),
                   ),
@@ -206,10 +217,11 @@ class _IntroText extends StatelessWidget {
 }
 
 class _IntroLine {
-  const _IntroLine(this.text, {this.highlight = false});
+  const _IntroLine(this.text, {this.highlight = false, this.emphasize = false});
 
   final String text;
   final bool highlight;
+  final bool emphasize;
 }
 
 class _PageDots extends StatelessWidget {

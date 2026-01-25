@@ -1,9 +1,105 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import 'home_screen.dart';
+import 'sign_up_screen.dart';
 
-class LoginScreen extends StatelessWidget {
+class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isLoading = false;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleEmailLogin() async {
+    final email = _emailController.text.trim();
+    final password = _passwordController.text;
+
+    if (email.isEmpty || password.isEmpty) {
+      _showError('이메일과 비밀번호를 입력해주세요.');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('로그인에 성공했습니다.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => const HomeScreen(),
+        ),
+      );
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showError(_messageForAuthError(error));
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      _showError('로그인 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  String _messageForAuthError(FirebaseAuthException error) {
+    switch (error.code) {
+      case 'user-not-found':
+        return '등록되지 않은 이메일입니다.';
+      case 'wrong-password':
+        return '비밀번호가 올바르지 않습니다.';
+      case 'invalid-email':
+        return '이메일 형식이 올바르지 않습니다.';
+      case 'user-disabled':
+        return '사용이 중지된 계정입니다.';
+      case 'too-many-requests':
+        return '시도 횟수가 많습니다. 잠시 후 다시 시도해주세요.';
+      default:
+        return '로그인에 실패했습니다. (${error.code})';
+    }
+  }
+
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -28,13 +124,10 @@ class LoginScreen extends StatelessWidget {
                 const _LoginHeader(),
                 const SizedBox(height: 26),
                 _LoginCard(
-                  onLoginPressed: () {
-                    Navigator.of(context).pushReplacement(
-                      MaterialPageRoute(
-                        builder: (context) => const HomeScreen(),
-                      ),
-                    );
-                  },
+                  emailController: _emailController,
+                  passwordController: _passwordController,
+                  isLoading: _isLoading,
+                  onLoginPressed: _handleEmailLogin,
                 ),
                 const SizedBox(height: 18),
                 const _DividerOr(),
@@ -103,9 +196,17 @@ class _LoginHeader extends StatelessWidget {
 }
 
 class _LoginCard extends StatelessWidget {
-  const _LoginCard({required this.onLoginPressed});
+  const _LoginCard({
+    required this.onLoginPressed,
+    required this.emailController,
+    required this.passwordController,
+    required this.isLoading,
+  });
 
   final VoidCallback onLoginPressed;
+  final TextEditingController emailController;
+  final TextEditingController passwordController;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
@@ -144,12 +245,13 @@ class _LoginCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
-          const _LabeledField(
+          _LabeledField(
             label: '이메일',
             hintText: '이메일을 입력하세요',
+            controller: emailController,
           ),
           const SizedBox(height: 12),
-          const _LabeledField(
+          _LabeledField(
             label: '비밀번호',
             hintText: '비밀번호를 입력하세요',
             trailing: Icon(
@@ -157,26 +259,40 @@ class _LoginCard extends StatelessWidget {
               color: Color(0xFFB5B5B5),
               size: 18,
             ),
+            controller: passwordController,
+            obscureText: true,
           ),
           const SizedBox(height: 16),
-          _LoginButton(onPressed: onLoginPressed),
+          _LoginButton(
+            onPressed: isLoading ? null : onLoginPressed,
+            isLoading: isLoading,
+          ),
           const SizedBox(height: 14),
-          Text.rich(
-            TextSpan(
-              text: '계정이 없으신가요? ',
-              style: const TextStyle(
-                fontSize: 12,
-                color: Color(0xFF8A8A8A),
-              ),
-              children: [
-                TextSpan(
-                  text: '회원가입',
-                  style: const TextStyle(
-                    color: Color(0xFFFF4FA6),
-                    fontWeight: FontWeight.w600,
-                  ),
+          GestureDetector(
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const SignUpScreen(),
                 ),
-              ],
+              );
+            },
+            child: Text.rich(
+              TextSpan(
+                text: '계정이 없으신가요? ',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF8A8A8A),
+                ),
+                children: [
+                  TextSpan(
+                    text: '회원가입',
+                    style: const TextStyle(
+                      color: Color(0xFFFF4FA6),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -190,11 +306,15 @@ class _LabeledField extends StatelessWidget {
     required this.label,
     required this.hintText,
     this.trailing,
+    this.controller,
+    this.obscureText = false,
   });
 
   final String label;
   final String hintText;
   final Widget? trailing;
+  final TextEditingController? controller;
+  final bool obscureText;
 
   @override
   Widget build(BuildContext context) {
@@ -211,6 +331,8 @@ class _LabeledField extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         TextField(
+          controller: controller,
+          obscureText: obscureText,
           decoration: InputDecoration(
             hintText: hintText,
             hintStyle: const TextStyle(
@@ -234,9 +356,10 @@ class _LabeledField extends StatelessWidget {
 }
 
 class _LoginButton extends StatelessWidget {
-  const _LoginButton({required this.onPressed});
+  const _LoginButton({required this.onPressed, required this.isLoading});
 
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
@@ -263,15 +386,24 @@ class _LoginButton extends StatelessWidget {
               ],
             ),
           ),
-          child: const Center(
-            child: Text(
-              '로그인',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-              ),
-            ),
+          child: Center(
+            child: isLoading
+                ? const SizedBox(
+                    height: 18,
+                    width: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  )
+                : const Text(
+                    '로그인',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
           ),
         ),
       ),
