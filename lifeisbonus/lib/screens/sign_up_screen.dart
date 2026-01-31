@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -14,9 +16,18 @@ class _SignUpScreenState extends State<SignUpScreen> {
   int _methodIndex = 0; // 0: email, 1: phone
   DateTime? _birthDate;
   bool _isSubmitting = false;
+  bool _verificationSent = false;
+  bool _emailVerified = false;
+  bool _isVerifying = false;
+  bool _smsCodeSent = false;
+  bool _phoneVerified = false;
+  String? _phoneVerificationId;
+  final _birthFieldKey = GlobalKey();
+  String _countryCode = '+82';
 
   final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
+  final _phoneCodeController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
 
@@ -24,6 +35,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
   void dispose() {
     _emailController.dispose();
     _phoneController.dispose();
+    _phoneCodeController.dispose();
     _passwordController.dispose();
     _confirmController.dispose();
     super.dispose();
@@ -209,22 +221,273 @@ class _SignUpScreenState extends State<SignUpScreen> {
     return '${date.year}년 ${date.month}월 ${date.day}일';
   }
 
-  Future<void> _completeSignUp() async {
+  String _generateTempPassword() {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final rand = Random.secure();
+    return List.generate(16, (_) => chars[rand.nextInt(chars.length)]).join();
+  }
+
+  void _resetVerificationState() {
+    _verificationSent = false;
+    _emailVerified = false;
+    _smsCodeSent = false;
+    _phoneVerified = false;
+    _phoneVerificationId = null;
+    _phoneCodeController.clear();
+  }
+
+  String? _normalizePhoneNumber(String input) {
+    final digits = input.replaceAll(RegExp(r'\D'), '');
+    if (digits.isEmpty) {
+      return null;
+    }
+    if (digits.startsWith('0')) {
+      if (_countryCode == '+82') {
+        return '+82${digits.substring(1)}';
+      }
+      return '$_countryCode$digits';
+    }
+    if (input.trim().startsWith('+')) {
+      return input.trim();
+    }
+    return '$_countryCode$digits';
+  }
+
+  Future<void> _selectCountryCode() async {
+    const codes = ['+82', '+1', '+81', '+86'];
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemBuilder: (context, index) {
+              final code = codes[index];
+              return ListTile(
+                title: Text(code),
+                trailing: code == _countryCode
+                    ? const Icon(Icons.check, color: Color(0xFF27C068))
+                    : null,
+                onTap: () => Navigator.of(context).pop(code),
+              );
+            },
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemCount: codes.length,
+          ),
+        );
+      },
+    );
+    if (selected != null && selected != _countryCode) {
+      setState(() {
+        _countryCode = selected;
+      });
+    }
+  }
+
+  Future<void> _scrollToBirthField() async {
+    final context = _birthFieldKey.currentContext;
+    if (context == null) {
+      return;
+    }
+    await Scrollable.ensureVisible(
+      context,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOut,
+    );
+  }
+
+  Future<void> _sendVerificationEmail() async {
     if (_methodIndex == 1) {
       _showMessage('전화번호 가입은 추후 제공 예정입니다.');
       return;
     }
     final email = _emailController.text.trim();
-    final password = _passwordController.text;
-    final confirm = _confirmController.text;
 
-    if (email.isEmpty || password.isEmpty || confirm.isEmpty) {
-      _showMessage('이메일과 비밀번호를 입력해주세요.');
+    if (email.isEmpty) {
+      _showMessage('이메일을 입력해주세요.');
       return;
     }
-    if (password != confirm) {
-      _showMessage('비밀번호가 일치하지 않습니다.');
+
+    setState(() {
+      _isVerifying = true;
+    });
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser != null && currentUser.email == email) {
+        await currentUser.sendEmailVerification();
+      } else {
+        if (currentUser != null) {
+          await FirebaseAuth.instance.signOut();
+        }
+        final credential =
+            await FirebaseAuth.instance.createUserWithEmailAndPassword(
+          email: email,
+          password: _generateTempPassword(),
+        );
+        await credential.user?.sendEmailVerification();
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _verificationSent = true;
+        _emailVerified = false;
+      });
+      _showMessage('인증 메일을 보냈습니다. 이메일을 확인해주세요.');
+    } on FirebaseAuthException catch (error) {
+      _showMessage(_messageForAuthError(error));
+    } catch (_) {
+      _showMessage('인증 메일 전송에 실패했습니다. 잠시 후 다시 시도해주세요.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isVerifying = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _checkEmailVerified() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      _showMessage('먼저 인증 메일을 보내주세요.');
       return;
+    }
+    await user.reload();
+    final refreshed = FirebaseAuth.instance.currentUser;
+      if (refreshed?.emailVerified ?? false) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _emailVerified = true;
+        });
+        await _scrollToBirthField();
+        _showMessage('이메일 인증이 완료되었습니다.');
+      } else {
+      _showMessage('아직 인증되지 않았습니다. 메일을 확인해주세요.');
+    }
+  }
+
+  Future<void> _sendPhoneCode() async {
+    final phone = _phoneController.text.trim();
+    final normalized = _normalizePhoneNumber(phone);
+    if (normalized == null) {
+      _showMessage('휴대폰 번호를 입력해주세요.');
+      return;
+    }
+    setState(() {
+      _isVerifying = true;
+    });
+    try {
+      await FirebaseAuth.instance.verifyPhoneNumber(
+        phoneNumber: normalized,
+        timeout: const Duration(seconds: 60),
+        verificationCompleted: (credential) async {
+          await FirebaseAuth.instance.signInWithCredential(credential);
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _phoneVerified = true;
+            _smsCodeSent = true;
+            _isVerifying = false;
+          });
+          await _scrollToBirthField();
+          _showMessage('전화번호 인증이 완료되었습니다.');
+        },
+        verificationFailed: (error) {
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _isVerifying = false;
+          });
+          _showMessage('인증에 실패했습니다. (${error.code})');
+        },
+        codeSent: (verificationId, resendToken) {
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _phoneVerificationId = verificationId;
+            _smsCodeSent = true;
+            _isVerifying = false;
+          });
+          _showMessage('인증 코드가 전송되었습니다.');
+        },
+        codeAutoRetrievalTimeout: (verificationId) {
+          _phoneVerificationId = verificationId;
+          if (mounted) {
+            setState(() {
+              _isVerifying = false;
+            });
+          }
+        },
+      );
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isVerifying = false;
+        });
+      }
+      _showMessage('인증 요청에 실패했습니다. 잠시 후 다시 시도해주세요.');
+    }
+  }
+
+  Future<void> _verifyPhoneCode() async {
+    final code = _phoneCodeController.text.trim();
+    if (code.isEmpty) {
+      _showMessage('인증 코드를 입력해주세요.');
+      return;
+    }
+    final verificationId = _phoneVerificationId;
+    if (verificationId == null) {
+      _showMessage('먼저 인증 코드를 전송해주세요.');
+      return;
+    }
+    setState(() {
+      _isVerifying = true;
+    });
+    try {
+      final credential = PhoneAuthProvider.credential(
+        verificationId: verificationId,
+        smsCode: code,
+      );
+      await FirebaseAuth.instance.signInWithCredential(credential);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _phoneVerified = true;
+        _isVerifying = false;
+      });
+      await _scrollToBirthField();
+      _showMessage('전화번호 인증이 완료되었습니다.');
+    } on FirebaseAuthException catch (error) {
+      if (mounted) {
+        setState(() {
+          _isVerifying = false;
+        });
+      }
+      _showMessage('인증에 실패했습니다. (${error.code})');
+    }
+  }
+
+  Future<void> _completeSignUp() async {
+    if (_methodIndex == 0) {
+      if (!_emailVerified) {
+        _showMessage('이메일 인증을 완료해주세요.');
+        return;
+      }
+    } else {
+      if (!_phoneVerified) {
+        _showMessage('전화번호 인증을 완료해주세요.');
+        return;
+      }
     }
     if (_birthDate == null) {
       _showMessage('생년월일을 선택해주세요.');
@@ -235,18 +498,25 @@ class _SignUpScreenState extends State<SignUpScreen> {
       _isSubmitting = true;
     });
     try {
-      final credential =
-          await FirebaseAuth.instance.createUserWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-      final user = credential.user;
-      if (user != null) {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        _showMessage('회원 정보가 없습니다. 인증을 다시 시도해주세요.');
+        return;
+      }
+      if (_methodIndex == 0) {
+        await user.updatePassword(_passwordController.text);
         await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-          'email': email,
+          'email': _emailController.text.trim(),
           'birthDate': _birthDate!.toIso8601String(),
           'createdAt': FieldValue.serverTimestamp(),
           'method': 'email',
+        });
+      } else {
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+          'phone': _normalizePhoneNumber(_phoneController.text.trim()),
+          'birthDate': _birthDate!.toIso8601String(),
+          'createdAt': FieldValue.serverTimestamp(),
+          'method': 'phone',
         });
       }
       if (!mounted) {
@@ -313,6 +583,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   onChanged: (index) {
                     setState(() {
                       _methodIndex = index;
+                      _resetVerificationState();
                     });
                   },
                 ),
@@ -321,10 +592,22 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   methodIndex: _methodIndex,
                   emailController: _emailController,
                   phoneController: _phoneController,
+                  phoneCodeController: _phoneCodeController,
                   passwordController: _passwordController,
                   confirmController: _confirmController,
                   birthDateLabel: _birthDateLabel,
                   onPickBirthDate: _pickBirthDate,
+                  birthFieldKey: _birthFieldKey,
+                  verificationSent: _verificationSent,
+                  emailVerified: _emailVerified,
+                  onSendVerification: _isVerifying ? null : _sendVerificationEmail,
+                  onCheckVerification: _checkEmailVerified,
+                  smsCodeSent: _smsCodeSent,
+                  phoneVerified: _phoneVerified,
+                  onSendPhoneCode: _isVerifying ? null : _sendPhoneCode,
+                  onVerifyPhoneCode: _verifyPhoneCode,
+                  countryCode: _countryCode,
+                  onSelectCountryCode: _selectCountryCode,
                 ),
                 const SizedBox(height: 18),
                 SizedBox(
@@ -522,19 +805,43 @@ class _SignUpCard extends StatelessWidget {
     required this.methodIndex,
     required this.emailController,
     required this.phoneController,
+    required this.phoneCodeController,
     required this.passwordController,
     required this.confirmController,
     required this.birthDateLabel,
     required this.onPickBirthDate,
+    required this.birthFieldKey,
+    required this.verificationSent,
+    required this.emailVerified,
+    required this.onSendVerification,
+    required this.onCheckVerification,
+    required this.smsCodeSent,
+    required this.phoneVerified,
+    required this.onSendPhoneCode,
+    required this.onVerifyPhoneCode,
+    required this.countryCode,
+    required this.onSelectCountryCode,
   });
 
   final int methodIndex;
   final TextEditingController emailController;
   final TextEditingController phoneController;
+  final TextEditingController phoneCodeController;
   final TextEditingController passwordController;
   final TextEditingController confirmController;
   final String birthDateLabel;
   final VoidCallback onPickBirthDate;
+  final GlobalKey birthFieldKey;
+  final bool verificationSent;
+  final bool emailVerified;
+  final VoidCallback? onSendVerification;
+  final VoidCallback onCheckVerification;
+  final bool smsCodeSent;
+  final bool phoneVerified;
+  final VoidCallback? onSendPhoneCode;
+  final VoidCallback onVerifyPhoneCode;
+  final String countryCode;
+  final VoidCallback onSelectCountryCode;
 
   @override
   Widget build(BuildContext context) {
@@ -554,25 +861,152 @@ class _SignUpCard extends StatelessWidget {
       ),
       child: Column(
         children: [
-          _LabeledField(
-            label: isEmail ? '이메일' : '전화번호',
-            hintText: isEmail ? '이메일을 입력하세요' : '휴대폰 번호를 입력하세요',
-            controller: isEmail ? emailController : phoneController,
-          ),
-          if (!isEmail) ...[
-            const SizedBox(height: 10),
-            const Text(
-              '전화번호 가입은 추후 제공 예정입니다.',
-              style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+          if (isEmail)
+            _LabeledField(
+              label: '이메일',
+              hintText: '이메일을 입력하세요',
+              controller: emailController,
+            )
+          else
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '전화번호',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF6F6F6F),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    InkWell(
+                      onTap: onSelectCountryCode,
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 12,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF7F7F7),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Row(
+                          children: [
+                            Text(
+                              countryCode,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            const Icon(
+                              Icons.keyboard_arrow_down_rounded,
+                              size: 16,
+                              color: Color(0xFF9B9B9B),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: phoneController,
+                        keyboardType: TextInputType.phone,
+                        decoration: InputDecoration(
+                          hintText: '휴대폰 번호를 입력하세요',
+                          hintStyle: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFFB6B6B6),
+                          ),
+                          filled: true,
+                          fillColor: const Color(0xFFF7F7F7),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-          ],
           if (isEmail) ...[
             const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: onSendVerification,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      side: BorderSide(
+                        color: emailVerified
+                            ? const Color(0xFF27C068)
+                            : const Color(0xFFFFC7A7),
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      backgroundColor:
+                          emailVerified ? const Color(0xFFE6F7ED) : null,
+                    ),
+                    child: Text(
+                      emailVerified
+                          ? '인증 완료'
+                          : (verificationSent ? '인증 메일 재전송' : '이메일 인증하기'),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: emailVerified
+                            ? const Color(0xFF27C068)
+                            : const Color(0xFFFF7A3D),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: onCheckVerification,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      backgroundColor: emailVerified
+                          ? const Color(0xFF27C068)
+                          : const Color(0xFFFF7A3D),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(
+                      emailVerified ? '인증 완료' : '인증 확인',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
             _LabeledField(
               label: '비밀번호',
               hintText: '비밀번호를 입력하세요',
               controller: passwordController,
               obscureText: true,
+              enabled: emailVerified,
             ),
             const SizedBox(height: 10),
             _LabeledField(
@@ -580,17 +1014,107 @@ class _SignUpCard extends StatelessWidget {
               hintText: '비밀번호를 다시 입력하세요',
               controller: confirmController,
               obscureText: true,
+              enabled: emailVerified,
             ),
             const SizedBox(height: 10),
-            _LabeledField(
-              label: '생년월일',
-              hintText: birthDateLabel,
-              readOnly: true,
-              onTap: onPickBirthDate,
-              trailing: const Icon(
-                Icons.calendar_today_rounded,
-                size: 16,
-                color: Color(0xFFB5B5B5),
+            KeyedSubtree(
+              key: birthFieldKey,
+              child: _LabeledField(
+                label: '생년월일',
+                hintText: birthDateLabel,
+                readOnly: true,
+                enabled: emailVerified,
+                onTap: emailVerified ? onPickBirthDate : null,
+                trailing: const Icon(
+                  Icons.calendar_today_rounded,
+                  size: 16,
+                  color: Color(0xFFB5B5B5),
+                ),
+              ),
+            ),
+          ],
+          if (!isEmail) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _LabeledField(
+                    label: '인증 코드',
+                    hintText: '코드를 입력하세요',
+                    controller: phoneCodeController,
+                    enabled: smsCodeSent,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: onSendPhoneCode,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      side: BorderSide(
+                        color: phoneVerified
+                            ? const Color(0xFF27C068)
+                            : const Color(0xFFFFC7A7),
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      backgroundColor:
+                          phoneVerified ? const Color(0xFFE6F7ED) : null,
+                    ),
+                    child: Text(
+                      phoneVerified
+                          ? '인증 완료'
+                          : (smsCodeSent ? '코드 재전송' : '코드 전송'),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: phoneVerified
+                            ? const Color(0xFF27C068)
+                            : const Color(0xFFFF7A3D),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: phoneVerified ? null : onVerifyPhoneCode,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      backgroundColor: phoneVerified
+                          ? const Color(0xFF27C068)
+                          : const Color(0xFFFF7A3D),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(
+                      phoneVerified ? '인증 완료' : '인증 확인',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            KeyedSubtree(
+              key: birthFieldKey,
+              child: _LabeledField(
+                label: '생년월일',
+                hintText: birthDateLabel,
+                readOnly: true,
+                enabled: phoneVerified,
+                onTap: phoneVerified ? onPickBirthDate : null,
+                trailing: const Icon(
+                  Icons.calendar_today_rounded,
+                  size: 16,
+                  color: Color(0xFFB5B5B5),
+                ),
               ),
             ),
           ],
@@ -606,6 +1130,7 @@ class _LabeledField extends StatelessWidget {
     required this.hintText,
     this.controller,
     this.trailing,
+    this.enabled = true,
     this.readOnly = false,
     this.obscureText = false,
     this.onTap,
@@ -615,6 +1140,7 @@ class _LabeledField extends StatelessWidget {
   final String hintText;
   final TextEditingController? controller;
   final Widget? trailing;
+  final bool enabled;
   final bool readOnly;
   final bool obscureText;
   final VoidCallback? onTap;
@@ -636,6 +1162,7 @@ class _LabeledField extends StatelessWidget {
         TextField(
           controller: controller,
           obscureText: obscureText,
+          enabled: enabled,
           readOnly: readOnly,
           onTap: onTap,
           decoration: InputDecoration(
@@ -656,6 +1183,40 @@ class _LabeledField extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ActionChip extends StatelessWidget {
+  const _ActionChip({
+    required this.label,
+    required this.onTap,
+    this.filled = false,
+  });
+
+  final String label;
+  final VoidCallback? onTap;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: filled ? const Color(0xFF3A8DFF) : const Color(0xFFEAF1FF),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: filled ? Colors.white : const Color(0xFF3A8DFF),
+          ),
+        ),
+      ),
     );
   }
 }

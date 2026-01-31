@@ -12,14 +12,24 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  int _methodIndex = 0; // 0: email, 1: phone
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _phoneCodeController = TextEditingController();
   bool _isLoading = false;
+  bool _isVerifying = false;
+  bool _smsCodeSent = false;
+  bool _phoneVerified = false;
+  String? _phoneVerificationId;
+  String _countryCode = '+82';
 
   @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
+    _phoneController.dispose();
+    _phoneCodeController.dispose();
     super.dispose();
   }
 
@@ -78,6 +88,182 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  String? _normalizePhoneNumber(String input) {
+    final digits = input.replaceAll(RegExp(r'\D'), '');
+    if (digits.isEmpty) {
+      return null;
+    }
+    if (digits.startsWith('0') && _countryCode == '+82') {
+      return '+82${digits.substring(1)}';
+    }
+    if (input.trim().startsWith('+')) {
+      return input.trim();
+    }
+    return '$_countryCode$digits';
+  }
+
+  Future<void> _selectCountryCode() async {
+    const codes = ['+82', '+1', '+81', '+86'];
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemBuilder: (context, index) {
+              final code = codes[index];
+              return ListTile(
+                title: Text(code),
+                trailing: code == _countryCode
+                    ? const Icon(Icons.check, color: Color(0xFF27C068))
+                    : null,
+                onTap: () => Navigator.of(context).pop(code),
+              );
+            },
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemCount: codes.length,
+          ),
+        );
+      },
+    );
+    if (selected != null && selected != _countryCode) {
+      setState(() {
+        _countryCode = selected;
+      });
+    }
+  }
+
+  Future<void> _sendPhoneCode() async {
+    final phone = _phoneController.text.trim();
+    final normalized = _normalizePhoneNumber(phone);
+    if (normalized == null) {
+      _showError('휴대폰 번호를 입력해주세요.');
+      return;
+    }
+    setState(() {
+      _isVerifying = true;
+    });
+    try {
+      await FirebaseAuth.instance.verifyPhoneNumber(
+        phoneNumber: normalized,
+        timeout: const Duration(seconds: 60),
+        verificationCompleted: (credential) async {
+          await FirebaseAuth.instance.signInWithCredential(credential);
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _phoneVerified = true;
+            _smsCodeSent = true;
+            _isVerifying = false;
+          });
+          _showError('전화번호 인증이 완료되었습니다.');
+        },
+        verificationFailed: (error) {
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _isVerifying = false;
+          });
+          _showError('인증에 실패했습니다. (${error.code})');
+        },
+        codeSent: (verificationId, resendToken) {
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _phoneVerificationId = verificationId;
+            _smsCodeSent = true;
+            _isVerifying = false;
+          });
+          _showError('인증 코드가 전송되었습니다.');
+        },
+        codeAutoRetrievalTimeout: (verificationId) {
+          _phoneVerificationId = verificationId;
+          if (mounted) {
+            setState(() {
+              _isVerifying = false;
+            });
+          }
+        },
+      );
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isVerifying = false;
+        });
+      }
+      _showError('인증 요청에 실패했습니다. 잠시 후 다시 시도해주세요.');
+    }
+  }
+
+  Future<void> _verifyPhoneCode() async {
+    final code = _phoneCodeController.text.trim();
+    if (code.isEmpty) {
+      _showError('인증 코드를 입력해주세요.');
+      return;
+    }
+    final verificationId = _phoneVerificationId;
+    if (verificationId == null) {
+      _showError('먼저 인증 코드를 전송해주세요.');
+      return;
+    }
+    setState(() {
+      _isVerifying = true;
+    });
+    try {
+      final credential = PhoneAuthProvider.credential(
+        verificationId: verificationId,
+        smsCode: code,
+      );
+      await FirebaseAuth.instance.signInWithCredential(credential);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _phoneVerified = true;
+        _isVerifying = false;
+      });
+      _showError('전화번호 인증이 완료되었습니다.');
+    } on FirebaseAuthException catch (error) {
+      if (mounted) {
+        setState(() {
+          _isVerifying = false;
+        });
+      }
+      _showError('인증에 실패했습니다. (${error.code})');
+    }
+  }
+
+  Future<void> _handlePhoneLogin() async {
+    if (!_phoneVerified) {
+      _showError('전화번호 인증을 완료해주세요.');
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('로그인에 성공했습니다.'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    if (!mounted) {
+      return;
+    }
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => const HomeScreen(),
+      ),
+    );
+  }
+
   String _messageForAuthError(FirebaseAuthException error) {
     switch (error.code) {
       case 'user-not-found':
@@ -122,13 +308,39 @@ class _LoginScreenState extends State<LoginScreen> {
               children: [
                 const SizedBox(height: 18),
                 const _LoginHeader(),
-                const SizedBox(height: 26),
-                _LoginCard(
-                  emailController: _emailController,
-                  passwordController: _passwordController,
-                  isLoading: _isLoading,
-                  onLoginPressed: _handleEmailLogin,
+                const SizedBox(height: 16),
+                _MethodTabs(
+                  currentIndex: _methodIndex,
+                  onChanged: (index) {
+                    setState(() {
+                      _methodIndex = index;
+                      _smsCodeSent = false;
+                      _phoneVerified = false;
+                      _phoneVerificationId = null;
+                      _phoneCodeController.clear();
+                    });
+                  },
                 ),
+                const SizedBox(height: 26),
+                _methodIndex == 0
+                    ? _LoginCard(
+                        emailController: _emailController,
+                        passwordController: _passwordController,
+                        isLoading: _isLoading,
+                        onLoginPressed: _handleEmailLogin,
+                      )
+                    : _PhoneLoginCard(
+                        countryCode: _countryCode,
+                        onSelectCountryCode: _selectCountryCode,
+                        phoneController: _phoneController,
+                        codeController: _phoneCodeController,
+                        smsCodeSent: _smsCodeSent,
+                        phoneVerified: _phoneVerified,
+                        isVerifying: _isVerifying,
+                        onSendCode: _sendPhoneCode,
+                        onVerifyCode: _verifyPhoneCode,
+                        onLoginPressed: _handlePhoneLogin,
+                      ),
                 const SizedBox(height: 18),
                 const _DividerOr(),
                 const SizedBox(height: 18),
@@ -191,6 +403,88 @@ class _LoginHeader extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _MethodTabs extends StatelessWidget {
+  const _MethodTabs({
+    required this.currentIndex,
+    required this.onChanged,
+  });
+
+  final int currentIndex;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x14000000),
+            blurRadius: 12,
+            offset: Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          _TabChip(
+            label: '이메일',
+            active: currentIndex == 0,
+            onTap: () => onChanged(0),
+          ),
+          _TabChip(
+            label: '전화번호',
+            active: currentIndex == 1,
+            onTap: () => onChanged(1),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TabChip extends StatelessWidget {
+  const _TabChip({
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: active ? const Color(0xFFFFF0E6) : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Center(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: active
+                    ? const Color(0xFFFF7A3D)
+                    : const Color(0xFF8A8A8A),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -294,6 +588,199 @@ class _LoginCard extends StatelessWidget {
                 ],
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhoneLoginCard extends StatelessWidget {
+  const _PhoneLoginCard({
+    required this.countryCode,
+    required this.onSelectCountryCode,
+    required this.phoneController,
+    required this.codeController,
+    required this.smsCodeSent,
+    required this.phoneVerified,
+    required this.isVerifying,
+    required this.onSendCode,
+    required this.onVerifyCode,
+    required this.onLoginPressed,
+  });
+
+  final String countryCode;
+  final VoidCallback onSelectCountryCode;
+  final TextEditingController phoneController;
+  final TextEditingController codeController;
+  final bool smsCodeSent;
+  final bool phoneVerified;
+  final bool isVerifying;
+  final VoidCallback onSendCode;
+  final VoidCallback onVerifyCode;
+  final VoidCallback onLoginPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x22000000),
+            blurRadius: 18,
+            offset: Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '전화번호',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF6F6F6F),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  InkWell(
+                    onTap: onSelectCountryCode,
+                    borderRadius: BorderRadius.circular(10),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF7F7F7),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          Text(
+                            countryCode,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(
+                            Icons.keyboard_arrow_down_rounded,
+                            size: 16,
+                            color: Color(0xFF9B9B9B),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: phoneController,
+                      keyboardType: TextInputType.phone,
+                      decoration: InputDecoration(
+                        hintText: '휴대폰 번호를 입력하세요',
+                        hintStyle: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFFB6B6B6),
+                        ),
+                        filled: true,
+                        fillColor: const Color(0xFFF7F7F7),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _LabeledField(
+                  label: '인증 코드',
+                  hintText: '코드를 입력하세요',
+                  controller: codeController,
+                  enabled: smsCodeSent,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: isVerifying ? null : onSendCode,
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    side: BorderSide(
+                      color: phoneVerified
+                          ? const Color(0xFF27C068)
+                          : const Color(0xFFFFC7A7),
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    backgroundColor:
+                        phoneVerified ? const Color(0xFFE6F7ED) : null,
+                  ),
+                  child: Text(
+                    phoneVerified
+                        ? '인증 완료'
+                        : (smsCodeSent ? '코드 재전송' : '코드 전송'),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: phoneVerified
+                          ? const Color(0xFF27C068)
+                          : const Color(0xFFFF7A3D),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: phoneVerified ? null : onVerifyCode,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    backgroundColor: phoneVerified
+                        ? const Color(0xFF27C068)
+                        : const Color(0xFFFF7A3D),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: Text(
+                    phoneVerified ? '인증 완료' : '인증 확인',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _LoginButton(
+            onPressed: phoneVerified ? onLoginPressed : null,
+            isLoading: false,
           ),
         ],
       ),
