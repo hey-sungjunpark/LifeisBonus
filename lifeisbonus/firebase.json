@@ -1,1 +1,36 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"lifeisbonus-b0d66","appId":"1:119024356555:android:ac293489b27b4c8a5b9f4e","fileOutput":"android/app/google-services.json"}},"ios":{"default":{"projectId":"lifeisbonus-b0d66","appId":"1:119024356555:ios:27ca9c8f4bcef5e35b9f4e","uploadDebugSymbols":false,"fileOutput":"ios/Runner/GoogleService-Info.plist"}},"dart":{"lib/firebase_options.dart":{"projectId":"lifeisbonus-b0d66","configurations":{"android":"1:119024356555:android:ac293489b27b4c8a5b9f4e","ios":"1:119024356555:ios:27ca9c8f4bcef5e35b9f4e"}}}}}}
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "lifeisbonus-b0d66",
+          "appId": "1:119024356555:android:ac293489b27b4c8a5b9f4e",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "ios": {
+        "default": {
+          "projectId": "lifeisbonus-b0d66",
+          "appId": "1:119024356555:ios:27ca9c8f4bcef5e35b9f4e",
+          "uploadDebugSymbols": false,
+          "fileOutput": "ios/Runner/GoogleService-Info.plist"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "lifeisbonus-b0d66",
+          "configurations": {
+            "android": "1:119024356555:android:ac293489b27b4c8a5b9f4e",
+            "ios": "1:119024356555:ios:27ca9c8f4bcef5e35b9f4e"
+          }
+        }
+      }
+    }
+  },
+  "functions": {
+    "source": "functions"
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  }
+}

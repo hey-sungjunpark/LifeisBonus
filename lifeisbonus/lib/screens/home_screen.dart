@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'placeholder_screen.dart';
 import 'record_screen.dart';
@@ -50,21 +53,111 @@ class _HomeBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
-      child: Column(
-        children: const [
-          _TodayBonusCard(),
-          SizedBox(height: 16),
-          _RemainingBonusCard(),
-          SizedBox(height: 16),
-          _LifeJourneyCard(),
-          SizedBox(height: 16),
-          _PeopleCard(),
-          SizedBox(height: 90),
-        ],
-      ),
+    return const _HomeBodyContent();
+  }
+}
+
+class _HomeBodyContent extends StatefulWidget {
+  const _HomeBodyContent();
+
+  @override
+  State<_HomeBodyContent> createState() => _HomeBodyContentState();
+}
+
+class _HomeBodyContentState extends State<_HomeBodyContent> {
+  late final Future<_UserMetrics> _metricsFuture = _loadMetrics();
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<_UserMetrics>(
+      future: _metricsFuture,
+      builder: (context, snapshot) {
+        final metrics = snapshot.data ?? _UserMetrics.empty;
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+          child: Column(
+            children: [
+              const _TodayBonusCard(),
+              const SizedBox(height: 16),
+              _RemainingBonusCard(metrics: metrics),
+              const SizedBox(height: 16),
+              _LifeJourneyCard(metrics: metrics),
+              const SizedBox(height: 16),
+              const _PeopleCard(),
+              const SizedBox(height: 90),
+            ],
+          ),
+        );
+      },
     );
+  }
+
+  Future<_UserMetrics> _loadMetrics() async {
+    final birthDate = await _loadBirthDate();
+    if (birthDate == null) {
+      return _UserMetrics.empty;
+    }
+    final now = DateTime.now();
+    final age = _calculateAge(birthDate, now);
+    const targetAge = 80;
+    final targetDate = _addYears(birthDate, targetAge);
+    final livedDays = now.difference(birthDate).inDays;
+    final remainingDays = targetDate.difference(now).inDays.clamp(0, 100000);
+    final progress = targetAge == 0 ? 0.0 : age / targetAge;
+    return _UserMetrics(
+      age: age,
+      targetAge: targetAge,
+      livedDays: livedDays,
+      remainingDays: remainingDays,
+      progress: progress.clamp(0.0, 1.0),
+    );
+  }
+
+  Future<DateTime?> _loadBirthDate() async {
+    final authUser = FirebaseAuth.instance.currentUser;
+    if (authUser != null) {
+      return _fetchBirthDate('users', authUser.uid);
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final provider = prefs.getString('lastProvider');
+    final providerId = prefs.getString('lastProviderId');
+    if (provider == null || providerId == null) {
+      return null;
+    }
+    return _fetchBirthDate('users', '$provider:$providerId');
+  }
+
+  Future<DateTime?> _fetchBirthDate(String collection, String docId) async {
+    final doc = await FirebaseFirestore.instance.collection(collection).doc(docId).get();
+    final data = doc.data();
+    final birthDateValue = data?['birthDate'];
+    if (birthDateValue is String) {
+      return DateTime.tryParse(birthDateValue);
+    }
+    return null;
+  }
+
+  int _calculateAge(DateTime birthDate, DateTime now) {
+    var age = now.year - birthDate.year;
+    final hasBirthdayPassed = (now.month > birthDate.month) ||
+        (now.month == birthDate.month && now.day >= birthDate.day);
+    if (!hasBirthdayPassed) {
+      age -= 1;
+    }
+    if (age < 0) {
+      age = 0;
+    }
+    return age;
+  }
+
+  DateTime _addYears(DateTime date, int years) {
+    final year = date.year + years;
+    final month = date.month;
+    final day = date.day;
+    final lastDay = DateTime(year, month + 1, 0).day;
+    final safeDay = day <= lastDay ? day : lastDay;
+    return DateTime(year, month, safeDay);
   }
 }
 
@@ -149,35 +242,44 @@ class _TodayBonusCard extends StatelessWidget {
 }
 
 class _RemainingBonusCard extends StatelessWidget {
-  const _RemainingBonusCard();
+  const _RemainingBonusCard({required this.metrics});
+
+  final _UserMetrics metrics;
 
   @override
   Widget build(BuildContext context) {
+    final ageLabel = metrics.age?.toString() ?? '--';
+    final targetAge = metrics.targetAge ?? 80;
+    final remainingYears = metrics.age == null ? '--' : (targetAge - metrics.age!).clamp(0, 200).toString();
+    final progressLabel = metrics.progress == null
+        ? '--'
+        : '${(metrics.progress! * 100).round()}%';
+    final progressValue = metrics.progress ?? 0.0;
     return _HomeCard(
       title: '남은 보너스 게임',
       leading: Icons.calendar_today_rounded,
       child: Column(
         children: [
           Row(
-            children: const [
-              Expanded(child: _AgePicker(label: '현재 나이', value: '28')),
-              SizedBox(width: 14),
-              Expanded(child: _AgePicker(label: '목표 나이', value: '80')),
+            children: [
+              Expanded(child: _AgePicker(label: '현재 나이', value: ageLabel)),
+              const SizedBox(width: 14),
+              Expanded(child: _AgePicker(label: '목표 나이', value: targetAge.toString())),
             ],
           ),
           const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: const [
-              _StatItem(label: '지난 년수', value: '28', color: Color(0xFFB356FF)),
-              _StatItem(label: '남은 년수', value: '52', color: Color(0xFFFF4FA6)),
-              _StatItem(label: '진행률', value: '35%', color: Color(0xFF6A6A6A)),
+            children: [
+              _StatItem(label: '지난 년수', value: ageLabel, color: const Color(0xFFB356FF)),
+              _StatItem(label: '남은 년수', value: remainingYears, color: const Color(0xFFFF4FA6)),
+              _StatItem(label: '진행률', value: progressLabel, color: const Color(0xFF6A6A6A)),
             ],
           ),
           const SizedBox(height: 18),
           Row(
-            children: const [
-              Text(
+            children: [
+              const Text(
                 '인생 진행률',
                 style: TextStyle(
                   fontSize: 12,
@@ -185,10 +287,10 @@ class _RemainingBonusCard extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              Spacer(),
+              const Spacer(),
               Text(
-                '35%',
-                style: TextStyle(
+                progressLabel,
+                style: const TextStyle(
                   fontSize: 12,
                   color: Color(0xFF7A7A7A),
                   fontWeight: FontWeight.w600,
@@ -208,7 +310,7 @@ class _RemainingBonusCard extends StatelessWidget {
                 ),
               ),
               FractionallySizedBox(
-                widthFactor: 0.35,
+                widthFactor: progressValue,
                 child: Container(
                   height: 10,
                   decoration: BoxDecoration(
@@ -223,17 +325,17 @@ class _RemainingBonusCard extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           Row(
-            children: const [
-              Text(
+            children: [
+              const Text(
                 '출생',
                 style: TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
               ),
-              Spacer(),
-              _CurrentAgeBadge(label: '현재 28세'),
-              Spacer(),
+              const Spacer(),
+              _CurrentAgeBadge(label: metrics.age == null ? '현재 --세' : '현재 ${metrics.age}세'),
+              const Spacer(),
               Text(
-                '80세',
-                style: TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
+                '${targetAge}세',
+                style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
               ),
             ],
           ),
@@ -244,10 +346,20 @@ class _RemainingBonusCard extends StatelessWidget {
 }
 
 class _LifeJourneyCard extends StatelessWidget {
-  const _LifeJourneyCard();
+  const _LifeJourneyCard({required this.metrics});
+
+  final _UserMetrics metrics;
 
   @override
   Widget build(BuildContext context) {
+    final ageLabel = metrics.age?.toString() ?? '--';
+    final livedDays = metrics.livedDays;
+    final remainingDays = metrics.remainingDays;
+    final age = metrics.age ?? -1;
+    final stageInfo = _stageForAge(age);
+    final progressText = livedDays == null || remainingDays == null
+        ? '나이를 입력하면 진행률이 표시됩니다.'
+        : '${_formatNumber(livedDays)}일 살아서\n+${_formatNumber(remainingDays)}일\n남았어요';
     return _HomeCard(
       title: '인생의 여정',
       leading: Icons.workspace_premium_rounded,
@@ -264,61 +376,65 @@ class _LifeJourneyCard extends StatelessWidget {
             child: Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
-                children: const [
-                  Icon(Icons.favorite_rounded, color: Color(0xFFFF4FA6)),
-                  SizedBox(height: 6),
+                children: [
+                  const Icon(Icons.favorite_rounded, color: Color(0xFFFF4FA6)),
+                  const SizedBox(height: 6),
                   Text(
-                    '28',
-                    style: TextStyle(
+                    ageLabel,
+                    style: const TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w700,
                       color: Color(0xFFB356FF),
                     ),
                   ),
                   Text(
-                    '10,220일 살아서\n+18,980일\n남았어요',
+                    progressText,
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 10, color: Color(0xFF9B9B9B)),
+                    style: const TextStyle(fontSize: 10, color: Color(0xFF9B9B9B)),
                   ),
                 ],
               ),
             ),
           ),
           const SizedBox(height: 16),
-          const _StageRow(
+          _StageRow(
             icon: Icons.toys_rounded,
             label: '유년기',
             range: '0-10세',
-            active: true,
+            active: stageInfo.activeRangeIndex >= 0,
+            highlight: stageInfo.currentRangeIndex == 0,
           ),
           const SizedBox(height: 10),
-          const _StageRow(
+          _StageRow(
             icon: Icons.menu_book_rounded,
             label: '청소년기',
             range: '11-20세',
-            active: true,
+            active: stageInfo.activeRangeIndex >= 1,
+            highlight: stageInfo.currentRangeIndex == 1,
           ),
           const SizedBox(height: 10),
-          const _StageRow(
+          _StageRow(
             icon: Icons.rocket_launch_rounded,
             label: '청년기',
             range: '21-35세',
-            active: false,
-            highlight: true,
+            active: stageInfo.activeRangeIndex >= 2,
+            highlight: stageInfo.currentRangeIndex == 2,
           ),
           const SizedBox(height: 10),
-          const _StageRow(
+          _StageRow(
             icon: Icons.work_rounded,
             label: '중년기',
             range: '36-60세',
-            active: false,
+            active: stageInfo.activeRangeIndex >= 3,
+            highlight: stageInfo.currentRangeIndex == 3,
           ),
           const SizedBox(height: 10),
-          const _StageRow(
+          _StageRow(
             icon: Icons.filter_vintage_rounded,
             label: '노년기',
             range: '61세+',
-            active: false,
+            active: stageInfo.activeRangeIndex >= 4,
+            highlight: stageInfo.currentRangeIndex == 4,
           ),
           const SizedBox(height: 12),
           Container(
@@ -327,10 +443,12 @@ class _LifeJourneyCard extends StatelessWidget {
               color: const Color(0xFFF7F0FF),
               borderRadius: BorderRadius.circular(14),
             ),
-            child: const Text(
-              '현재 28세로 인생의 35%를 경험했습니다\n앞으로 52년의 소중한 시간이 남아있습니다 ✨',
+            child: Text(
+              metrics.age == null
+                  ? '생년월일을 입력하면 진행 상황을 보여드려요 ✨'
+                  : '현재 ${metrics.age}세로 인생의 ${(metrics.progress! * 100).round()}%를 경험했습니다\n앞으로 ${metrics.remainingYears}년의 소중한 시간이 남아있습니다 ✨',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 11, color: Color(0xFF8A8A8A)),
+              style: const TextStyle(fontSize: 11, color: Color(0xFF8A8A8A)),
             ),
           ),
         ],
@@ -512,6 +630,73 @@ class _AgePicker extends StatelessWidget {
       ],
     );
   }
+}
+
+class _UserMetrics {
+  const _UserMetrics({
+    this.age,
+    this.targetAge,
+    this.livedDays,
+    this.remainingDays,
+    this.progress,
+  });
+
+  final int? age;
+  final int? targetAge;
+  final int? livedDays;
+  final int? remainingDays;
+  final double? progress;
+
+  int? get remainingYears {
+    if (age == null || targetAge == null) {
+      return null;
+    }
+    return (targetAge! - age!).clamp(0, 200);
+  }
+
+  static const empty = _UserMetrics();
+}
+
+class _StageInfo {
+  const _StageInfo({
+    required this.activeRangeIndex,
+    required this.currentRangeIndex,
+  });
+
+  final int activeRangeIndex;
+  final int currentRangeIndex;
+}
+
+_StageInfo _stageForAge(int age) {
+  if (age < 0) {
+    return const _StageInfo(activeRangeIndex: -1, currentRangeIndex: -1);
+  }
+  if (age <= 10) {
+    return const _StageInfo(activeRangeIndex: 0, currentRangeIndex: 0);
+  }
+  if (age <= 20) {
+    return const _StageInfo(activeRangeIndex: 1, currentRangeIndex: 1);
+  }
+  if (age <= 35) {
+    return const _StageInfo(activeRangeIndex: 2, currentRangeIndex: 2);
+  }
+  if (age <= 60) {
+    return const _StageInfo(activeRangeIndex: 3, currentRangeIndex: 3);
+  }
+  return const _StageInfo(activeRangeIndex: 4, currentRangeIndex: 4);
+}
+
+String _formatNumber(int value) {
+  final text = value.toString();
+  final buffer = StringBuffer();
+  for (var i = 0; i < text.length; i++) {
+    final position = text.length - i;
+    buffer.write(text[i]);
+    if (position > 1 && position % 3 == 1) {
+      buffer.write(',');
+    }
+  }
+  return buffer.toString();
 }
 
 class _StatItem extends StatelessWidget {

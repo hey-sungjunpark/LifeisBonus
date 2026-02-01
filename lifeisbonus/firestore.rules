@@ -1,0 +1,17 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read: if true;
+      allow create, update: if (
+        userId.matches('^kakao:.*')
+        && request.resource.data.method == 'kakao'
+        && request.resource.data.birthDate is string
+      ) || (
+        userId.matches('^naver:.*')
+        && request.resource.data.method == 'naver'
+        && request.resource.data.birthDate is string
+      );
+    }
+  }
+}

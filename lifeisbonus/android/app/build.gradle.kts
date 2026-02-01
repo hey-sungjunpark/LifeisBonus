@@ -31,6 +31,33 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["kakaoNativeAppKey"] =
+            (project.findProperty("KAKAO_NATIVE_APP_KEY") as String?)
+                ?: "2fb2536b99bf76097001386b2837c5ce"
+        resValue(
+            "string",
+            "naver_client_id",
+            (project.findProperty("NAVER_CLIENT_ID") as String?)
+                ?: "Pk2pE37pz6xuUEj9j6bA",
+        )
+        resValue(
+            "string",
+            "naver_client_secret",
+            (project.findProperty("NAVER_CLIENT_SECRET") as String?)
+                ?: "NcLY4aB1UD",
+        )
+        resValue(
+            "string",
+            "naver_client_name",
+            (project.findProperty("NAVER_CLIENT_NAME") as String?)
+                ?: "인생은보너스",
+        )
+        resValue(
+            "string",
+            "naver_url_scheme",
+            (project.findProperty("NAVER_URL_SCHEME") as String?)
+                ?: "naverPk2pE37pz6xuUEj9j6bA",
+        )
     }
 
     buildTypes {

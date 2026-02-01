@@ -1,8 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:kakao_flutter_sdk_user/kakao_flutter_sdk_user.dart';
+import 'package:flutter_naver_login/flutter_naver_login.dart';
+import 'package:flutter_naver_login/interface/types/naver_login_status.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'home_screen.dart';
 import 'sign_up_screen.dart';
+import 'google_profile_screen.dart';
+import 'kakao_profile_screen.dart';
+import 'naver_profile_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -12,6 +21,23 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  static const String _kakaoNativeAppKey = String.fromEnvironment(
+    'KAKAO_NATIVE_APP_KEY',
+    defaultValue: '2fb2536b99bf76097001386b2837c5ce',
+  );
+  static const String _naverClientId = String.fromEnvironment(
+    'NAVER_CLIENT_ID',
+    defaultValue: 'Pk2pE37pz6xuUEj9j6bA',
+  );
+  static const String _naverClientSecret = String.fromEnvironment(
+    'NAVER_CLIENT_SECRET',
+    defaultValue: 'NcLY4aB1UD',
+  );
+  static const String _naverClientName = String.fromEnvironment(
+    'NAVER_CLIENT_NAME',
+    defaultValue: '인생은보너스',
+  );
+
   int _methodIndex = 0; // 0: email, 1: phone
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -264,6 +290,233 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  Future<void> _handleGoogleLogin() async {
+    try {
+      final googleUser = await GoogleSignIn().signIn();
+      if (googleUser == null) {
+        return;
+      }
+
+      final googleAuth = await googleUser.authentication;
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      final result = await FirebaseAuth.instance.signInWithCredential(
+        credential,
+      );
+      final user = result.user;
+      if (user == null || !mounted) {
+        return;
+      }
+
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      final data = doc.data();
+      final hasBirthDate = data != null && data['birthDate'] != null;
+
+      if (!mounted) {
+        return;
+      }
+
+      if (hasBirthDate) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('로그인에 성공했습니다.')),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+        if (!mounted) {
+          return;
+        }
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => const HomeScreen(),
+          ),
+        );
+      } else {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => const GoogleProfileScreen(),
+          ),
+        );
+      }
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showError(_messageForAuthError(error));
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      _showError('구글 로그인 중 문제가 발생했습니다.');
+    }
+  }
+
+  Future<void> _handleKakaoLogin() async {
+    if (_kakaoNativeAppKey == 'YOUR_KAKAO_NATIVE_APP_KEY') {
+      _showError('카카오 네이티브 앱 키를 설정해주세요.');
+      return;
+    }
+    try {
+      final OAuthToken token;
+      final isInstalled = await isKakaoTalkInstalled();
+      if (isInstalled) {
+        token = await UserApi.instance.loginWithKakaoTalk();
+      } else {
+        token = await UserApi.instance.loginWithKakaoAccount();
+      }
+      if (token.accessToken.isEmpty) {
+        if (!mounted) {
+          return;
+        }
+        _showError('카카오 로그인에 실패했습니다.');
+        return;
+      }
+      final user = await UserApi.instance.me();
+      if (!mounted) {
+        return;
+      }
+      final kakaoId = user.id;
+      if (kakaoId == null) {
+        _showError('카카오 사용자 정보를 가져오지 못했습니다.');
+        return;
+      }
+      final nickname = user.kakaoAccount?.profile?.nickname;
+      final email = user.kakaoAccount?.email;
+
+      await _storeLastProvider('kakao', kakaoId.toString());
+
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc('kakao:$kakaoId')
+          .get();
+      final data = doc.data();
+      final hasBirthDate = data != null && data['birthDate'] != null;
+
+      if (!mounted) {
+        return;
+      }
+
+      if (hasBirthDate) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              nickname == null ? '카카오 로그인에 성공했습니다.' : '카카오 로그인 성공: $nickname',
+            ),
+          ),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+        if (!mounted) {
+          return;
+        }
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => const HomeScreen(),
+          ),
+        );
+      } else {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => KakaoProfileScreen(
+              kakaoId: kakaoId.toString(),
+              email: email,
+              nickname: nickname,
+            ),
+          ),
+        );
+      }
+    } on KakaoAuthException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showError('카카오 로그인에 실패했습니다. (${error.error} / ${error.errorDescription})');
+    } on KakaoClientException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showError('카카오 로그인에 실패했습니다. (${error.msg})');
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      _showError('카카오 로그인 중 문제가 발생했습니다.');
+    }
+  }
+
+  Future<void> _handleNaverLogin() async {
+    if (_naverClientId == 'YOUR_NAVER_CLIENT_ID' ||
+        _naverClientSecret == 'YOUR_NAVER_CLIENT_SECRET' ||
+        _naverClientName == 'YOUR_NAVER_CLIENT_NAME') {
+      _showError('네이버 로그인 키를 설정해주세요.');
+      return;
+    }
+    try {
+      final result = await FlutterNaverLogin.logIn();
+      if (result.status != NaverLoginStatus.loggedIn) {
+        _showError('네이버 로그인에 실패했습니다.');
+        return;
+      }
+
+      final account = result.account;
+      final naverId = account?.id;
+      if (naverId == null || naverId.isEmpty) {
+        _showError('네이버 사용자 정보를 가져오지 못했습니다.');
+        return;
+      }
+
+      await _storeLastProvider('naver', naverId);
+
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc('naver:$naverId')
+          .get();
+      final data = doc.data();
+      final hasBirthDate = data != null && data['birthDate'] != null;
+
+      if (!mounted) {
+        return;
+      }
+
+      if (hasBirthDate) {
+        final nickname = account?.nickname;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              nickname == null ? '네이버 로그인에 성공했습니다.' : '네이버 로그인 성공: $nickname',
+            ),
+          ),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+        if (!mounted) {
+          return;
+        }
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => const HomeScreen(),
+          ),
+        );
+      } else {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => NaverProfileScreen(
+              naverId: naverId,
+              email: account?.email,
+              nickname: account?.nickname,
+            ),
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      _showError('네이버 로그인 중 문제가 발생했습니다.');
+    }
+  }
+
   String _messageForAuthError(FirebaseAuthException error) {
     switch (error.code) {
       case 'user-not-found':
@@ -285,6 +538,12 @@ class _LoginScreenState extends State<LoginScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
+  }
+
+  Future<void> _storeLastProvider(String provider, String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('lastProvider', provider);
+    await prefs.setString('lastProviderId', id);
   }
 
   @override
@@ -344,7 +603,11 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 18),
                 const _DividerOr(),
                 const SizedBox(height: 18),
-                const _SocialButtons(),
+                _SocialButtons(
+                  onGooglePressed: _handleGoogleLogin,
+                  onKakaoPressed: _handleKakaoLogin,
+                  onNaverPressed: _handleNaverLogin,
+                ),
                 const SizedBox(height: 24),
                 TextButton(
                   onPressed: () {},
@@ -434,12 +697,14 @@ class _MethodTabs extends StatelessWidget {
       child: Row(
         children: [
           _TabChip(
-            label: '이메일',
+            icon: Icons.mail_outline_rounded,
+            label: '이메일로 로그인',
             active: currentIndex == 0,
             onTap: () => onChanged(0),
           ),
           _TabChip(
-            label: '전화번호',
+            icon: Icons.sms_outlined,
+            label: '전화번호로 로그인',
             active: currentIndex == 1,
             onTap: () => onChanged(1),
           ),
@@ -451,11 +716,13 @@ class _MethodTabs extends StatelessWidget {
 
 class _TabChip extends StatelessWidget {
   const _TabChip({
+    required this.icon,
     required this.label,
     required this.active,
     required this.onTap,
   });
 
+  final IconData icon;
   final String label;
   final bool active;
   final VoidCallback onTap;
@@ -472,15 +739,28 @@ class _TabChip extends StatelessWidget {
             borderRadius: BorderRadius.circular(12),
           ),
           child: Center(
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: active
-                    ? const Color(0xFFFF7A3D)
-                    : const Color(0xFF8A8A8A),
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  icon,
+                  size: 16,
+                  color: active
+                      ? const Color(0xFFFF7A3D)
+                      : const Color(0xFF8A8A8A),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: active
+                        ? const Color(0xFFFF7A3D)
+                        : const Color(0xFF8A8A8A),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -519,26 +799,6 @@ class _LoginCard extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: const [
-              Icon(
-                Icons.mail_outline_rounded,
-                size: 18,
-                color: Color(0xFFFF7A3D),
-              ),
-              SizedBox(width: 6),
-              Text(
-                '이메일로 로그인',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF5E5E5E),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
           _LabeledField(
             label: '이메일',
             hintText: '이메일을 입력하세요',
@@ -795,6 +1055,7 @@ class _LabeledField extends StatelessWidget {
     this.trailing,
     this.controller,
     this.obscureText = false,
+    this.enabled = true,
   });
 
   final String label;
@@ -802,6 +1063,7 @@ class _LabeledField extends StatelessWidget {
   final Widget? trailing;
   final TextEditingController? controller;
   final bool obscureText;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -820,6 +1082,7 @@ class _LabeledField extends StatelessWidget {
         TextField(
           controller: controller,
           obscureText: obscureText,
+          enabled: enabled,
           decoration: InputDecoration(
             hintText: hintText,
             hintStyle: const TextStyle(
@@ -926,24 +1189,33 @@ class _DividerOr extends StatelessWidget {
 }
 
 class _SocialButtons extends StatelessWidget {
-  const _SocialButtons();
+  const _SocialButtons({
+    required this.onGooglePressed,
+    required this.onKakaoPressed,
+    required this.onNaverPressed,
+  });
+
+  final VoidCallback onGooglePressed;
+  final VoidCallback onKakaoPressed;
+  final VoidCallback onNaverPressed;
 
   @override
   Widget build(BuildContext context) {
     return Column(
-      children: const [
+      children: [
         _SocialButton(
           label: 'Google로 시작하기',
           background: Colors.white,
-          textColor: Color(0xFF5E5E5E),
-          borderColor: Color(0xFFE2E2E2),
-          icon: Icon(
+          textColor: const Color(0xFF5E5E5E),
+          borderColor: const Color(0xFFE2E2E2),
+          icon: const Icon(
             Icons.g_mobiledata_rounded,
             color: Color(0xFF4285F4),
             size: 24,
           ),
+          onPressed: onGooglePressed,
         ),
-        SizedBox(height: 12),
+        const SizedBox(height: 12),
         _SocialButton(
           label: '카카오로 시작하기',
           background: Color(0xFFFEE500),
@@ -953,8 +1225,9 @@ class _SocialButtons extends StatelessWidget {
             color: Color(0xFF3C1E1E),
             size: 18,
           ),
+          onPressed: onKakaoPressed,
         ),
-        SizedBox(height: 12),
+        const SizedBox(height: 12),
         _SocialButton(
           label: '네이버로 시작하기',
           background: Color(0xFF03C75A),
@@ -964,6 +1237,7 @@ class _SocialButtons extends StatelessWidget {
             color: Colors.white,
             size: 10,
           ),
+          onPressed: onNaverPressed,
         ),
       ],
     );
@@ -977,6 +1251,7 @@ class _SocialButton extends StatelessWidget {
     required this.textColor,
     this.borderColor,
     required this.icon,
+    this.onPressed,
   });
 
   final String label;
@@ -984,6 +1259,7 @@ class _SocialButton extends StatelessWidget {
   final Color textColor;
   final Color? borderColor;
   final Widget icon;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -991,7 +1267,7 @@ class _SocialButton extends StatelessWidget {
       height: 48,
       width: double.infinity,
       child: ElevatedButton(
-        onPressed: () {},
+        onPressed: onPressed ?? () {},
         style: ElevatedButton.styleFrom(
           backgroundColor: background,
           elevation: 0,

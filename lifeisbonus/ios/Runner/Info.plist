@@ -45,5 +45,48 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.119024356555-1mvpbuf6qvpkgqulugofchbp0d4mhivo</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>kakao2fb2536b99bf76097001386b2837c5ce</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>naverPk2pE37pz6xuUEj9j6bA</string>
+			</array>
+		</dict>
+	</array>
+	<key>NidClientID</key>
+	<string>Pk2pE37pz6xuUEj9j6bA</string>
+	<key>NidClientSecret</key>
+	<string>NcLY4aB1UD</string>
+	<key>NidAppName</key>
+	<string>인생은보너스</string>
+	<key>NidUrlScheme</key>
+	<string>naverPk2pE37pz6xuUEj9j6bA</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>kakaokompassauth</string>
+		<string>kakaolink</string>
+		<string>kakaoplus</string>
+		<string>naversearchapp</string>
+		<string>naversearchthirdlogin</string>
+	</array>
 </dict>
 </plist>
