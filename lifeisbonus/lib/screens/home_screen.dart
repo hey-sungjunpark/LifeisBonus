@@ -65,7 +65,8 @@ class _HomeBodyContent extends StatefulWidget {
 }
 
 class _HomeBodyContentState extends State<_HomeBodyContent> {
-  late final Future<_UserMetrics> _metricsFuture = _loadMetrics();
+  late Future<_UserMetrics> _metricsFuture = _loadMetrics();
+  int? _targetAgeOverride;
 
   @override
   Widget build(BuildContext context) {
@@ -79,7 +80,10 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
             children: [
               const _TodayBonusCard(),
               const SizedBox(height: 16),
-              _RemainingBonusCard(metrics: metrics),
+              _RemainingBonusCard(
+                metrics: metrics,
+                onChangeTargetAge: _updateTargetAge,
+              ),
               const SizedBox(height: 16),
               _LifeJourneyCard(metrics: metrics),
               const SizedBox(height: 16),
@@ -94,22 +98,26 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
 
   Future<_UserMetrics> _loadMetrics() async {
     final birthDate = await _loadBirthDate();
+    final prefs = await SharedPreferences.getInstance();
+    final storedTargetAge = prefs.getInt('targetAge');
+
     if (birthDate == null) {
       return _UserMetrics.empty;
     }
+
     final now = DateTime.now();
     final age = _calculateAge(birthDate, now);
-    const targetAge = 80;
+    final targetAge = _targetAgeOverride ?? storedTargetAge ?? 80;
     final targetDate = _addYears(birthDate, targetAge);
     final livedDays = now.difference(birthDate).inDays;
     final remainingDays = targetDate.difference(now).inDays.clamp(0, 100000);
-    final progress = targetAge == 0 ? 0.0 : age / targetAge;
+    final progress = targetAge == 0 ? null : age / targetAge;
     return _UserMetrics(
       age: age,
       targetAge: targetAge,
       livedDays: livedDays,
       remainingDays: remainingDays,
-      progress: progress.clamp(0.0, 1.0),
+      progress: progress?.clamp(0.0, 1.0),
     );
   }
 
@@ -158,6 +166,24 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
     final lastDay = DateTime(year, month + 1, 0).day;
     final safeDay = day <= lastDay ? day : lastDay;
     return DateTime(year, month, safeDay);
+  }
+
+  void _updateTargetAge(int nextAge) {
+    final clamped = nextAge.clamp(1, 120);
+    setState(() {
+      _targetAgeOverride = clamped;
+      _metricsFuture = _applyOverrides(targetAge: clamped);
+    });
+  }
+
+  Future<_UserMetrics> _applyOverrides({
+    int? targetAge,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (targetAge != null) {
+      await prefs.setInt('targetAge', targetAge);
+    }
+    return _loadMetrics();
   }
 }
 
@@ -242,15 +268,21 @@ class _TodayBonusCard extends StatelessWidget {
 }
 
 class _RemainingBonusCard extends StatelessWidget {
-  const _RemainingBonusCard({required this.metrics});
+  const _RemainingBonusCard({
+    required this.metrics,
+    required this.onChangeTargetAge,
+  });
 
   final _UserMetrics metrics;
+  final ValueChanged<int> onChangeTargetAge;
 
   @override
   Widget build(BuildContext context) {
     final ageLabel = metrics.age?.toString() ?? '--';
     final targetAge = metrics.targetAge ?? 80;
-    final remainingYears = metrics.age == null ? '--' : (targetAge - metrics.age!).clamp(0, 200).toString();
+    final remainingYears = metrics.age == null
+        ? '--'
+        : (targetAge - metrics.age!).clamp(0, 200).toString();
     final progressLabel = metrics.progress == null
         ? '--'
         : '${(metrics.progress! * 100).round()}%';
@@ -262,9 +294,23 @@ class _RemainingBonusCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Expanded(child: _AgePicker(label: '현재 나이', value: ageLabel)),
+              Expanded(
+                child: _AgePicker(
+                  label: '현재 나이',
+                  value: ageLabel,
+                  onIncrease: null,
+                  onDecrease: null,
+                ),
+              ),
               const SizedBox(width: 14),
-              Expanded(child: _AgePicker(label: '목표 나이', value: targetAge.toString())),
+              Expanded(
+                child: _AgePicker(
+                  label: '목표 나이',
+                  value: targetAge.toString(),
+                  onIncrease: () => onChangeTargetAge(targetAge + 1),
+                  onDecrease: () => onChangeTargetAge(targetAge - 1),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -355,86 +401,93 @@ class _LifeJourneyCard extends StatelessWidget {
     final ageLabel = metrics.age?.toString() ?? '--';
     final livedDays = metrics.livedDays;
     final remainingDays = metrics.remainingDays;
+    final remainingYearsLabel =
+        metrics.remainingYears == null ? '--' : metrics.remainingYears!.toString();
     final age = metrics.age ?? -1;
     final stageInfo = _stageForAge(age);
     final progressText = livedDays == null || remainingDays == null
         ? '나이를 입력하면 진행률이 표시됩니다.'
-        : '${_formatNumber(livedDays)}일 살아서\n+${_formatNumber(remainingDays)}일\n남았어요';
+        : '${_formatNumber(livedDays)}일 살았어요.';
+    final remainingText = remainingDays == null
+        ? '+--일 더!'
+        : '+${_formatNumber(remainingDays)}일 더!';
+    final progressValue = metrics.progress ?? 0.0;
     return _HomeCard(
       title: '인생의 여정',
       leading: Icons.workspace_premium_rounded,
       child: Column(
         children: [
           const SizedBox(height: 6),
-          Container(
-            height: 120,
-            width: 120,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: Color(0xFFE6E1EE), width: 10),
-            ),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.favorite_rounded, color: Color(0xFFFF4FA6)),
-                  const SizedBox(height: 6),
-                  Text(
-                    ageLabel,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFFB356FF),
-                    ),
-                  ),
-                  Text(
-                    progressText,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 10, color: Color(0xFF9B9B9B)),
-                  ),
-                ],
-              ),
-            ),
+          _JourneyRing(
+            progress: progressValue,
+            ageLabel: ageLabel,
+            livedDaysText: progressText,
+            remainingText: remainingText,
           ),
           const SizedBox(height: 16),
           _StageRow(
-            icon: Icons.toys_rounded,
+            emoji: '🧸',
+            chipColor: const Color(0xFFE8F1FF),
+            chipTextColor: const Color(0xFF2C6BFF),
             label: '유년기',
             range: '0-10세',
             active: stageInfo.activeRangeIndex >= 0,
             highlight: stageInfo.currentRangeIndex == 0,
+            progress: stageInfo.currentRangeIndex == 0
+                ? _stageProgress(age, 0)
+                : (stageInfo.activeRangeIndex >= 0 ? 1.0 : 0.0),
           ),
           const SizedBox(height: 10),
           _StageRow(
-            icon: Icons.menu_book_rounded,
+            emoji: '📚',
+            chipColor: const Color(0xFFE7FAEC),
+            chipTextColor: const Color(0xFF16A34A),
             label: '청소년기',
             range: '11-20세',
             active: stageInfo.activeRangeIndex >= 1,
             highlight: stageInfo.currentRangeIndex == 1,
+            progress: stageInfo.currentRangeIndex == 1
+                ? _stageProgress(age, 1)
+                : (stageInfo.activeRangeIndex >= 1 ? 1.0 : 0.0),
           ),
           const SizedBox(height: 10),
           _StageRow(
-            icon: Icons.rocket_launch_rounded,
+            emoji: '🚀',
+            chipColor: const Color(0xFFF0E8FF),
+            chipTextColor: const Color(0xFF7C3AED),
             label: '청년기',
             range: '21-35세',
             active: stageInfo.activeRangeIndex >= 2,
             highlight: stageInfo.currentRangeIndex == 2,
+            progress: stageInfo.currentRangeIndex == 2
+                ? _stageProgress(age, 2)
+                : (stageInfo.activeRangeIndex >= 2 ? 1.0 : 0.0),
           ),
           const SizedBox(height: 10),
           _StageRow(
-            icon: Icons.work_rounded,
+            emoji: '💼',
+            chipColor: const Color(0xFFFFF1E6),
+            chipTextColor: const Color(0xFFF97316),
             label: '중년기',
             range: '36-60세',
             active: stageInfo.activeRangeIndex >= 3,
             highlight: stageInfo.currentRangeIndex == 3,
+            progress: stageInfo.currentRangeIndex == 3
+                ? _stageProgress(age, 3)
+                : (stageInfo.activeRangeIndex >= 3 ? 1.0 : 0.0),
           ),
           const SizedBox(height: 10),
           _StageRow(
-            icon: Icons.filter_vintage_rounded,
+            emoji: '🌅',
+            chipColor: const Color(0xFFFFEFF6),
+            chipTextColor: const Color(0xFFDB2777),
             label: '노년기',
             range: '61세+',
             active: stageInfo.activeRangeIndex >= 4,
             highlight: stageInfo.currentRangeIndex == 4,
+            progress: stageInfo.currentRangeIndex == 4
+                ? _stageProgress(age, 4)
+                : (stageInfo.activeRangeIndex >= 4 ? 1.0 : 0.0),
           ),
           const SizedBox(height: 12),
           Container(
@@ -443,13 +496,46 @@ class _LifeJourneyCard extends StatelessWidget {
               color: const Color(0xFFF7F0FF),
               borderRadius: BorderRadius.circular(14),
             ),
-            child: Text(
-              metrics.age == null
-                  ? '생년월일을 입력하면 진행 상황을 보여드려요 ✨'
-                  : '현재 ${metrics.age}세로 인생의 ${(metrics.progress! * 100).round()}%를 경험했습니다\n앞으로 ${metrics.remainingYears}년의 소중한 시간이 남아있습니다 ✨',
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 11, color: Color(0xFF8A8A8A)),
-            ),
+            child: metrics.age == null || metrics.progress == null
+                ? const Text(
+                    '생년월일을 입력하면 진행 상황을 보여드려요 ✨',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 11, color: Color(0xFF8A8A8A)),
+                  )
+                : RichText(
+                    textAlign: TextAlign.center,
+                    text: TextSpan(
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF8A8A8A)),
+                      children: [
+                        const TextSpan(text: '현재 '),
+                        TextSpan(
+                          text: '${metrics.age}세',
+                          style: const TextStyle(
+                            color: Color(0xFFB356FF),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const TextSpan(text: '로 인생의 '),
+                        TextSpan(
+                          text: '${(metrics.progress! * 100).round()}%',
+                          style: const TextStyle(
+                            color: Color(0xFFB356FF),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const TextSpan(text: '를 경험했습니다\n'),
+                        const TextSpan(text: '앞으로 '),
+                        TextSpan(
+                          text: '${remainingYearsLabel}년',
+                          style: const TextStyle(
+                            color: Color(0xFFB356FF),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const TextSpan(text: '의 소중한 시간이 남아있습니다 ✨'),
+                      ],
+                    ),
+                  ),
           ),
         ],
       ),
@@ -586,10 +672,17 @@ class _HomeCard extends StatelessWidget {
 }
 
 class _AgePicker extends StatelessWidget {
-  const _AgePicker({required this.label, required this.value});
+  const _AgePicker({
+    required this.label,
+    required this.value,
+    this.onIncrease,
+    this.onDecrease,
+  });
 
   final String label;
   final String value;
+  final VoidCallback? onIncrease;
+  final VoidCallback? onDecrease;
 
   @override
   Widget build(BuildContext context) {
@@ -622,12 +715,44 @@ class _AgePicker extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              const Icon(Icons.keyboard_arrow_up_rounded, size: 18),
-              const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
+              _AgeIconButton(
+                icon: Icons.keyboard_arrow_up_rounded,
+                onPressed: onIncrease,
+              ),
+              _AgeIconButton(
+                icon: Icons.keyboard_arrow_down_rounded,
+                onPressed: onDecrease,
+              ),
             ],
           ),
         ),
       ],
+    );
+  }
+}
+
+class _AgeIconButton extends StatelessWidget {
+  const _AgeIconButton({
+    required this.icon,
+    this.onPressed,
+  });
+
+  final IconData icon;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final isEnabled = onPressed != null;
+    return GestureDetector(
+      onTap: onPressed,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        child: Icon(
+          icon,
+          size: 18,
+          color: isEnabled ? const Color(0xFF4C4C4C) : const Color(0xFFBDBDBD),
+        ),
+      ),
     );
   }
 }
@@ -657,6 +782,140 @@ class _UserMetrics {
   static const empty = _UserMetrics();
 }
 
+class _JourneyRing extends StatefulWidget {
+  const _JourneyRing({
+    required this.progress,
+    required this.ageLabel,
+    required this.livedDaysText,
+    required this.remainingText,
+  });
+
+  final double progress;
+  final String ageLabel;
+  final String livedDaysText;
+  final String remainingText;
+
+  @override
+  State<_JourneyRing> createState() => _JourneyRingState();
+}
+
+class _JourneyRingState extends State<_JourneyRing>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _heartController;
+  late final Animation<double> _heartScale;
+
+  @override
+  void initState() {
+    super.initState();
+    _heartController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    )..repeat(reverse: true);
+    _heartScale = Tween<double>(begin: 0.96, end: 1.08).animate(
+      CurvedAnimation(parent: _heartController, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _heartController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0.0, end: widget.progress),
+      duration: const Duration(milliseconds: 900),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, child) {
+        return SizedBox(
+          height: 156,
+          width: 156,
+          child: CustomPaint(
+            painter: _RingPainter(progress: value),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ScaleTransition(
+                    scale: _heartScale,
+                    child: const Text('💖', style: TextStyle(fontSize: 24)),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    '${widget.ageLabel}세',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFFB356FF),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    widget.livedDaysText,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 10, color: Color(0xFF7A7A7A)),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    widget.remainingText,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 10, color: Color(0xFFFF5A4E)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _RingPainter extends CustomPainter {
+  _RingPainter({required this.progress});
+
+  final double progress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const stroke = 10.0;
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (size.width - stroke) / 2;
+    final backgroundPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke
+      ..color = const Color(0xFFF0F0F3);
+    canvas.drawCircle(center, radius, backgroundPaint);
+
+    final rect = Rect.fromCircle(center: center, radius: radius);
+    final gradient = const SweepGradient(
+      colors: [
+        Color(0xFFFFD6D6),
+        Color(0xFFFFB3B3),
+        Color(0xFFFF8A8A),
+        Color(0xFFFF5A5A),
+      ],
+      startAngle: -3.141592653589793 / 2,
+      endAngle: 3 * 3.141592653589793 / 2,
+    );
+    final progressPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke
+      ..strokeCap = StrokeCap.round
+      ..shader = gradient.createShader(rect);
+
+    final sweep = progress.clamp(0.0, 1.0) * 2 * 3.141592653589793;
+    canvas.drawArc(rect, -3.141592653589793 / 2, sweep, false, progressPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _RingPainter oldDelegate) {
+    return oldDelegate.progress != progress;
+  }
+}
+
 class _StageInfo {
   const _StageInfo({
     required this.activeRangeIndex,
@@ -684,6 +943,28 @@ _StageInfo _stageForAge(int age) {
     return const _StageInfo(activeRangeIndex: 3, currentRangeIndex: 3);
   }
   return const _StageInfo(activeRangeIndex: 4, currentRangeIndex: 4);
+}
+
+double _stageProgress(int age, int stageIndex) {
+  if (age < 0) {
+    return 0.0;
+  }
+  if (stageIndex == 0) {
+    return (age / 10).clamp(0.0, 1.0);
+  }
+  if (stageIndex == 1) {
+    return ((age - 11) / 10).clamp(0.0, 1.0);
+  }
+  if (stageIndex == 2) {
+    return ((age - 21) / 15).clamp(0.0, 1.0);
+  }
+  if (stageIndex == 3) {
+    return ((age - 36) / 25).clamp(0.0, 1.0);
+  }
+  if (stageIndex == 4) {
+    return ((age - 61) / 19).clamp(0.0, 1.0);
+  }
+  return 0.0;
 }
 
 String _formatNumber(int value) {
@@ -759,22 +1040,31 @@ class _CurrentAgeBadge extends StatelessWidget {
 
 class _StageRow extends StatelessWidget {
   const _StageRow({
-    required this.icon,
+    required this.emoji,
+    required this.chipColor,
+    required this.chipTextColor,
     required this.label,
     required this.range,
     required this.active,
-    this.highlight = false,
+    required this.highlight,
+    required this.progress,
   });
 
-  final IconData icon;
+  final String emoji;
+  final Color chipColor;
+  final Color chipTextColor;
   final String label;
   final String range;
   final bool active;
   final bool highlight;
+  final double progress;
 
   @override
   Widget build(BuildContext context) {
     final borderColor = highlight ? const Color(0xFFC8A6FF) : Colors.transparent;
+    final progressGradient = highlight
+        ? const LinearGradient(colors: [Color(0xFFB356FF), Color(0xFFFF4FA6)])
+        : const LinearGradient(colors: [Color(0xFF9CA3AF), Color(0xFF9CA3AF)]);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
@@ -786,20 +1076,32 @@ class _StageRow extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(icon, size: 18, color: const Color(0xFF8A8A8A)),
+              Text(emoji, style: const TextStyle(fontSize: 22)),
               const SizedBox(width: 8),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: highlight ? const Color(0xFF8E5BFF) : Colors.black87,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                range,
-                style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: chipColor,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: chipTextColor,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    range,
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
+                  ),
+                ],
               ),
               const Spacer(),
               if (active)
@@ -818,16 +1120,11 @@ class _StageRow extends StatelessWidget {
             child: Align(
               alignment: Alignment.centerLeft,
               child: FractionallySizedBox(
-                widthFactor: highlight ? 0.62 : (active ? 1 : 0),
+                widthFactor: progress.clamp(0.0, 1.0),
                 child: Container(
                   height: 6,
                   decoration: BoxDecoration(
-                    gradient: highlight
-                        ? const LinearGradient(
-                            colors: [Color(0xFFB356FF), Color(0xFFFF4FA6)],
-                          )
-                        : null,
-                    color: active ? const Color(0xFF27C068) : Colors.transparent,
+                    gradient: progressGradient,
                     borderRadius: BorderRadius.circular(999),
                   ),
                 ),

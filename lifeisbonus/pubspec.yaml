@@ -43,6 +43,7 @@ dependencies:
   kakao_flutter_sdk_user: ^1.10.0
   flutter_naver_login: ^2.1.1
   shared_preferences: ^2.3.2
+  http: ^1.2.2
 
 dev_dependencies:
   flutter_test:
