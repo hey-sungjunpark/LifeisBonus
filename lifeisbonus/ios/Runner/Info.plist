@@ -88,5 +88,9 @@
 		<string>naversearchapp</string>
 		<string>naversearchthirdlogin</string>
 	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>사진과 동영상을 업로드하기 위해 사진 보관함 접근이 필요합니다.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>사진과 동영상을 촬영하기 위해 카메라 접근이 필요합니다.</string>
 </dict>
 </plist>

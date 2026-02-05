@@ -1,7 +1,16 @@
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 
 class RecordScreen extends StatefulWidget {
   const RecordScreen({super.key});
@@ -13,6 +22,19 @@ class RecordScreen extends StatefulWidget {
 class _RecordScreenState extends State<RecordScreen> {
   int _tabIndex = 0;
   final List<_SchoolRecord> _schools = [];
+  final List<_MediaItem> _mediaItems = [];
+  final ImagePicker _picker = ImagePicker();
+  bool _loadingSchools = false;
+  String? _schoolLoadError;
+  bool _loadingMedia = false;
+  String? _mediaLoadError;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSchools();
+    _loadMedia();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -76,7 +98,19 @@ class _RecordScreenState extends State<RecordScreen> {
           if (_tabIndex == 0) ...[
             _SchoolHeader(onAdd: _openAddSchool),
             const SizedBox(height: 12),
-            if (_schools.isEmpty)
+            if (_loadingSchools)
+              const _EmptyHint(
+                icon: Icons.hourglass_bottom_rounded,
+                title: '학교 기록을 불러오는 중이에요',
+                subtitle: '잠시만 기다려주세요',
+              )
+            else if (_schoolLoadError != null)
+              _EmptyHint(
+                icon: Icons.error_outline_rounded,
+                title: '학교 기록을 불러오지 못했어요',
+                subtitle: _schoolLoadError!,
+              )
+            else if (_schools.isEmpty)
               const _EmptyHint(
                 icon: Icons.school_rounded,
                 title: '아직 추가한 학교가 없어요',
@@ -87,16 +121,16 @@ class _RecordScreenState extends State<RecordScreen> {
                   .map(
                     (record) => Padding(
                       padding: const EdgeInsets.only(bottom: 12),
-                      child: _SchoolCard(record: record),
+                      child: _SchoolCard(
+                        record: record,
+                        onEdit: () => _openEditSchool(record),
+                        onDelete: () => _deleteSchool(record),
+                      ),
                     ),
                   )
                   .toList(),
           ] else
-            const _EmptyHint(
-              icon: Icons.hourglass_empty_rounded,
-              title: '준비 중인 탭입니다',
-              subtitle: '곧 새로운 기록 기능을 제공할게요',
-            ),
+            _buildOtherTabs(),
         ],
       ),
     );
@@ -106,6 +140,24 @@ class _RecordScreenState extends State<RecordScreen> {
     setState(() {
       _tabIndex = index;
     });
+  }
+
+  Widget _buildOtherTabs() {
+    if (_tabIndex == 3) {
+      return _PhotoTab(
+        items: _mediaItems,
+        onUploadTap: _openMediaPicker,
+        onFileSelectTap: _openMediaPicker,
+        loading: _loadingMedia,
+        error: _mediaLoadError,
+        onDeleteTap: _deleteMediaItem,
+      );
+    }
+    return const _EmptyHint(
+      icon: Icons.hourglass_empty_rounded,
+      title: '준비 중인 탭입니다',
+      subtitle: '곧 새로운 기록 기능을 제공할게요',
+    );
   }
 
   Future<void> _openAddSchool() async {
@@ -121,9 +173,529 @@ class _RecordScreenState extends State<RecordScreen> {
     if (record == null) {
       return;
     }
+    final savedRecord = await _persistSchool(record);
+    if (savedRecord == null) {
+      return;
+    }
     setState(() {
-      _schools.insert(0, record);
+      _schools.add(savedRecord);
+      _sortSchools();
     });
+    _showSnack('학교가 저장되었습니다.');
+  }
+
+  Future<void> _openMediaPicker() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE0E0E0),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const Icon(Icons.photo_library_rounded),
+                title: const Text('사진 선택'),
+                onTap: () => Navigator.of(context).pop('photo'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.videocam_rounded),
+                title: const Text('동영상 선택'),
+                onTap: () => Navigator.of(context).pop('video'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (action == 'photo') {
+      final images = await _picker.pickMultiImage();
+      if (images.isEmpty) {
+        final single = await _picker.pickImage(source: ImageSource.gallery);
+        if (single == null) {
+          return;
+        }
+        await _addAndUploadMedia(single, isVideo: false);
+        return;
+      }
+      for (final file in images) {
+        await _addAndUploadMedia(file, isVideo: false);
+      }
+    } else if (action == 'video') {
+      final video = await _picker.pickVideo(source: ImageSource.gallery);
+      if (video == null) {
+        return;
+      }
+      await _addAndUploadMedia(video, isVideo: true);
+    }
+  }
+
+  Future<void> _addAndUploadMedia(XFile file, {required bool isVideo}) async {
+    final localItem = _MediaItem.local(file: file, isVideo: isVideo);
+    setState(() {
+      _mediaItems.insert(0, localItem);
+    });
+    await _uploadMedia(localItem);
+  }
+
+  Future<void> _loadMedia() async {
+    setState(() {
+      _loadingMedia = true;
+      _mediaLoadError = null;
+    });
+    try {
+      final userDocId = await _resolveUserDocId();
+      if (userDocId == null) {
+        setState(() {
+          _mediaItems.clear();
+          _mediaLoadError = '로그인 정보가 없어 미디어를 불러올 수 없어요.';
+        });
+        return;
+      }
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userDocId)
+          .collection('media')
+          .orderBy('createdAt', descending: true)
+          .get();
+      final items = snapshot.docs
+          .map((doc) => _MediaItem.fromFirestore(doc.id, doc.data()))
+          .whereType<_MediaItem>()
+          .toList();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _mediaItems
+          ..clear()
+          ..addAll(items);
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _mediaLoadError =
+            '미디어를 불러오지 못했어요. (${e.toString().replaceAll('Exception: ', '')})';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingMedia = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _uploadMedia(_MediaItem item) async {
+    final userDocId = await _resolveUserDocId();
+    if (userDocId == null) {
+      _showSnack('로그인 정보가 없어 업로드할 수 없어요.');
+      return;
+    }
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(userDocId)
+        .collection('media')
+        .doc();
+    final mediaId = docRef.id;
+    final extension = _fileExtension(item.file?.path ?? '') ?? (item.isVideo ? 'mp4' : 'jpg');
+    final storagePath = 'users/$userDocId/media/$mediaId.$extension';
+    final storageRef = FirebaseStorage.instance.ref(storagePath);
+
+    Uint8List? thumbBytes;
+    if (item.isVideo && item.file != null && !kIsWeb) {
+      thumbBytes = await VideoThumbnail.thumbnailData(
+        video: item.file!.path,
+        imageFormat: ImageFormat.JPEG,
+        quality: 70,
+        maxWidth: 360,
+      );
+    }
+    String? thumbPath;
+    if (thumbBytes != null) {
+      thumbPath = 'users/$userDocId/media/$mediaId-thumb.jpg';
+    }
+
+    try {
+      await docRef.set({
+        'isVideo': item.isVideo,
+        'storagePath': storagePath,
+        'thumbnailPath': thumbPath,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'status': 'uploading',
+      });
+
+      final uploadTask = storageRef.putFile(
+        File(item.file!.path),
+        SettableMetadata(
+          contentType: item.isVideo ? 'video/mp4' : 'image/jpeg',
+        ),
+      );
+
+      uploadTask.snapshotEvents.listen((snapshot) {
+        final progress = snapshot.bytesTransferred / snapshot.totalBytes;
+        setState(() {
+          item
+            ..uploadProgress = progress
+            ..uploading = snapshot.state == TaskState.running;
+        });
+      });
+
+      await uploadTask;
+      final url = await storageRef.getDownloadURL();
+
+      String? thumbUrl;
+      if (thumbBytes != null && thumbPath != null) {
+        final thumbRef = FirebaseStorage.instance.ref(thumbPath);
+        await thumbRef.putData(
+          thumbBytes,
+          SettableMetadata(contentType: 'image/jpeg'),
+        );
+        thumbUrl = await thumbRef.getDownloadURL();
+      }
+
+      await docRef.update({
+        'url': url,
+        'thumbnailUrl': thumbUrl,
+        'status': 'ready',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      setState(() {
+        item
+          ..id = mediaId
+          ..url = url
+          ..thumbnailUrl = thumbUrl
+          ..uploading = false
+          ..uploadProgress = 1.0
+          ..storagePath = storagePath
+          ..thumbnailPath = thumbPath;
+      });
+    } catch (e) {
+      setState(() {
+        item
+          ..uploading = false
+          ..uploadFailed = true;
+      });
+      _showSnack('업로드에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})');
+    }
+  }
+
+  Future<void> _deleteMediaItem(_MediaItem item) async {
+    final userDocId = await _resolveUserDocId();
+    if (userDocId == null) {
+      _showSnack('로그인 정보가 없어 삭제할 수 없어요.');
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('삭제할까요?'),
+        content: const Text('선택한 미디어를 삭제합니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    try {
+      if (item.storagePath != null) {
+        await FirebaseStorage.instance.ref(item.storagePath!).delete();
+      }
+      if (item.thumbnailPath != null) {
+        await FirebaseStorage.instance.ref(item.thumbnailPath!).delete();
+      }
+      if (item.id != null) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userDocId)
+            .collection('media')
+            .doc(item.id)
+            .delete();
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _mediaItems.remove(item);
+      });
+      _showSnack('삭제되었습니다.');
+    } catch (e) {
+      _showSnack('삭제에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})');
+    }
+  }
+
+  Future<void> _openEditSchool(_SchoolRecord record) async {
+    final updated = await showModalBottomSheet<_SchoolRecord>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (context) => _AddSchoolSheet(initialRecord: record),
+    );
+    if (updated == null) {
+      return;
+    }
+    final savedRecord = await _persistSchool(updated);
+    if (savedRecord == null) {
+      return;
+    }
+    setState(() {
+      final index = _schools.indexWhere((item) => item.id == savedRecord.id);
+      if (index >= 0) {
+        _schools[index] = savedRecord;
+      }
+      _sortSchools();
+    });
+    _showSnack('학교 정보가 수정되었습니다.');
+  }
+
+  Future<void> _deleteSchool(_SchoolRecord record) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('삭제할까요?'),
+        content: Text('${record.name} 기록을 삭제합니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    final userDocId = await _resolveUserDocId();
+    if (userDocId == null) {
+      _showSnack('로그인 정보가 없어 삭제할 수 없어요.');
+      return;
+    }
+    if (record.id.isEmpty) {
+      _showSnack('저장되지 않은 항목이라 삭제할 수 없어요.');
+      return;
+    }
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userDocId)
+          .collection('schools')
+          .doc(record.id)
+          .delete();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _schools.removeWhere((item) => item.id == record.id);
+        _sortSchools();
+      });
+      _showSnack('학교 기록이 삭제되었습니다.');
+    } catch (e) {
+      _showSnack('삭제에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})');
+    }
+  }
+
+  Future<void> _loadSchools() async {
+    setState(() {
+      _loadingSchools = true;
+      _schoolLoadError = null;
+    });
+    try {
+      final userDocId = await _resolveUserDocId();
+      if (userDocId == null) {
+        setState(() {
+          _schools.clear();
+          _schoolLoadError = '로그인 정보가 없어 학교 기록을 불러올 수 없어요.';
+        });
+        return;
+      }
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userDocId)
+          .collection('schools')
+          .orderBy('createdAt', descending: true)
+          .get();
+      final records = snapshot.docs
+          .map((doc) => _SchoolRecord.fromFirestore(doc.id, doc.data()))
+          .whereType<_SchoolRecord>()
+          .toList();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _schools
+          ..clear()
+          ..addAll(records);
+        _sortSchools();
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _schoolLoadError = '학교 기록을 불러오지 못했어요. (${e.toString().replaceAll('Exception: ', '')})';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingSchools = false;
+        });
+      }
+    }
+  }
+
+  Future<_SchoolRecord?> _persistSchool(_SchoolRecord record) async {
+    try {
+      final userDocId = await _resolveUserDocId();
+      if (userDocId == null) {
+        _showSnack('로그인 정보가 없어 저장할 수 없어요.');
+        return null;
+      }
+      final schoolKey = _buildSchoolKey(record);
+      final data = {
+        'level': record.level.key,
+        'name': record.name,
+        'province': record.province,
+        'district': record.district,
+        'dong': record.dong,
+        'grade': record.grade,
+        'classNumber': record.classNumber,
+        'year': record.year,
+        'gradeEntries': record.gradeEntries
+            ?.map((entry) => entry.toFirestore())
+            .toList(),
+        'kindergartenGradYear': record.kindergartenGradYear,
+        'universityEntryYear': record.universityEntryYear,
+        'major': record.major,
+        'schoolKey': schoolKey,
+        'ownerId': userDocId,
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+      if (record.id.isEmpty) {
+        final docRef = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userDocId)
+            .collection('schools')
+            .add({
+          ...data,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+        return record.copyWith(id: docRef.id);
+      }
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userDocId)
+          .collection('schools')
+          .doc(record.id)
+          .set(data, SetOptions(merge: true));
+      return record;
+    } catch (e) {
+      _showSnack('학교 저장에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})');
+      return null;
+    }
+  }
+
+  Future<String?> _resolveUserDocId() async {
+    final authUser = FirebaseAuth.instance.currentUser;
+    if (authUser != null) {
+      return authUser.uid;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final provider = prefs.getString('lastProvider');
+    final providerId = prefs.getString('lastProviderId');
+    if (provider == null || providerId == null) {
+      return null;
+    }
+    return '$provider:$providerId';
+  }
+
+  String _buildSchoolKey(_SchoolRecord record) {
+    String normalize(String value) =>
+        value.toLowerCase().replaceAll(' ', '').replaceAll('-', '');
+    final parts = [
+      record.level.key,
+      normalize(record.name),
+      normalize(record.province),
+      normalize(record.district),
+      normalize(record.dong),
+    ];
+    return parts.join('|');
+  }
+
+  String? _fileExtension(String path) {
+    final dot = path.lastIndexOf('.');
+    if (dot == -1) {
+      return null;
+    }
+    final ext = path.substring(dot + 1).toLowerCase();
+    return ext.isEmpty ? null : ext;
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  void _sortSchools() {
+    _schools.sort((a, b) {
+      final orderA = _schoolOrderIndex(a.level);
+      final orderB = _schoolOrderIndex(b.level);
+      if (orderA != orderB) {
+        return orderA.compareTo(orderB);
+      }
+      return a.name.compareTo(b.name);
+    });
+  }
+
+  int _schoolOrderIndex(_SchoolLevel level) {
+    switch (level) {
+      case _SchoolLevel.kindergarten:
+        return 0;
+      case _SchoolLevel.elementary:
+        return 1;
+      case _SchoolLevel.middle:
+        return 2;
+      case _SchoolLevel.high:
+        return 3;
+      case _SchoolLevel.university:
+        return 4;
+    }
   }
 }
 
@@ -289,7 +861,9 @@ class _EmptyHint extends StatelessWidget {
 }
 
 class _AddSchoolSheet extends StatefulWidget {
-  const _AddSchoolSheet();
+  const _AddSchoolSheet({this.initialRecord});
+
+  final _SchoolRecord? initialRecord;
 
   @override
   State<_AddSchoolSheet> createState() => _AddSchoolSheetState();
@@ -300,6 +874,8 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
   _ProvinceOption? _province;
   String? _districtSelected;
   String? _dongSelected;
+  String? _presetDistrict;
+  String? _presetDong;
   bool _loadingDistricts = false;
   bool _loadingDongs = false;
   List<String> _districtOptions = [];
@@ -308,8 +884,9 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
   List<Map<String, dynamic>>? _allRegionRowsCache;
   final _schoolController = TextEditingController();
   final _majorController = TextEditingController();
-  int _grade = 1;
-  int _classNumber = 1;
+  List<_GradeEntry> _gradeEntries = [];
+  int _kindergartenGradYear = DateTime.now().year;
+  int _universityEntryYear = DateTime.now().year;
 
   static const String _dataGoServiceKey = String.fromEnvironment(
     'DATA_GO_SERVICE_KEY',
@@ -338,6 +915,41 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    final record = widget.initialRecord;
+    if (record == null) {
+      _gradeEntries = List.generate(
+        6,
+        (index) => _GradeEntry(
+          grade: index + 1,
+          classNumber: 1,
+          year: DateTime.now().year + index - 5,
+        ),
+      );
+      return;
+    }
+    _level = record.level;
+    _schoolController.text = record.name;
+    _majorController.text = record.major ?? '';
+    _gradeEntries = record.gradeEntries ?? [];
+    _kindergartenGradYear = record.kindergartenGradYear ?? DateTime.now().year;
+    _universityEntryYear = record.universityEntryYear ?? DateTime.now().year;
+    _province = _provinces.firstWhere(
+      (item) => item.label == record.province,
+      orElse: () => _provinces.first,
+    );
+    _presetDistrict = record.district;
+    _presetDong = record.dong;
+    final province = _province;
+    if (province != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _loadDistricts(province.apiName);
+      });
+    }
+  }
+
+  @override
   void dispose() {
     _schoolController.dispose();
     _majorController.dispose();
@@ -348,220 +960,264 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
   Widget build(BuildContext context) {
     final isElementary = _level == _SchoolLevel.elementary;
     final isMiddle = _level == _SchoolLevel.middle;
+    final isHigh = _level == _SchoolLevel.high;
     final isUniversity = _level == _SchoolLevel.university;
+    final isKindergarten = _level == _SchoolLevel.kindergarten;
 
     return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.only(
-          left: 20,
-          right: 20,
-          top: 16,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: const Color(0xFFE0E0E0),
-                borderRadius: BorderRadius.circular(999),
-              ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            padding: EdgeInsets.only(
+              left: 20,
+              right: 20,
+              top: 16,
+              bottom: MediaQuery.of(context).viewInsets.bottom + 20,
             ),
-            const SizedBox(height: 12),
-            const Text(
-              '학교 추가',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 16),
-            _SectionCard(
-              title: '학교 종류',
-              child: DropdownButtonFormField<_SchoolLevel>(
-                value: _level,
-                items: _SchoolLevel.values
-                    .map(
-                      (level) => DropdownMenuItem(
-                        value: level,
-                        child: Text(level.label),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  if (value == null) {
-                    return;
-                  }
-                  setState(() {
-                    _level = value;
-                  });
-                },
-                decoration: _fieldDecoration('학교 종류 선택'),
-              ),
-            ),
-            const SizedBox(height: 12),
-            _SectionCard(
-              title: '지역',
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
               child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  DropdownButtonFormField<_ProvinceOption>(
-                    value: _province,
-                    items: _provinces
-                        .map(
-                          (province) => DropdownMenuItem(
-                            value: province,
-                            child: Text(province.label),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) {
-                      setState(() {
-                        _province = value;
-                        _districtSelected = null;
-                        _dongSelected = null;
-                        _districtOptions = [];
-                        _dongOptions = [];
-                        _regionError = null;
-                      });
-                      if (value != null) {
-                        _loadDistricts(value.apiName);
-                      }
-                    },
-                    decoration: _fieldDecoration('시/도 선택'),
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE0E0E0),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
                   ),
-                  const SizedBox(height: 8),
-                  DropdownButtonFormField<String>(
-                    value: _districtSelected,
-                    items: _districtOptions
-                        .map(
-                          (district) => DropdownMenuItem(
-                            value: district,
-                            child: Text(district),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: _loadingDistricts
-                        ? null
-                        : (value) {
+                  const SizedBox(height: 12),
+                  const Text(
+                    '학교 추가',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 16),
+                  _SectionCard(
+                    title: '학교 종류',
+                    child: DropdownButtonFormField<_SchoolLevel>(
+                      value: _level,
+                      items: _SchoolLevel.values
+                          .map(
+                            (level) => DropdownMenuItem(
+                              value: level,
+                              child: Text(level.label),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) {
+                          return;
+                        }
+                        setState(() {
+                          _level = value;
+                          if (_level == _SchoolLevel.elementary ||
+                              _level == _SchoolLevel.middle ||
+                              _level == _SchoolLevel.high) {
+                            final count = _level == _SchoolLevel.elementary ? 6 : 3;
+                            _gradeEntries = List.generate(
+                              count,
+                              (index) => _GradeEntry(
+                                grade: index + 1,
+                                classNumber: 1,
+                                year: DateTime.now().year + index - (count - 1),
+                              ),
+                            );
+                          } else {
+                            _gradeEntries = [];
+                          }
+                        });
+                      },
+                      decoration: _fieldDecoration('학교 종류 선택'),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _SectionCard(
+                    title: '지역',
+                    child: Column(
+                      children: [
+                        DropdownButtonFormField<_ProvinceOption>(
+                          value: _province,
+                          items: _provinces
+                              .map(
+                                (province) => DropdownMenuItem(
+                                  value: province,
+                                  child: Text(province.label),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
                             setState(() {
-                              _districtSelected = value;
+                              _province = value;
+                              _districtSelected = null;
                               _dongSelected = null;
+                              _districtOptions = [];
                               _dongOptions = [];
                               _regionError = null;
                             });
-                            final province = _province;
-                            if (province != null && value != null) {
-                              _loadDongs(province.apiName, value);
+                            if (value != null) {
+                              _loadDistricts(value.apiName);
                             }
                           },
-                    decoration: _fieldDecoration(
-                      _loadingDistricts ? '시/군/구 불러오는 중...' : '시/군/구 선택',
-                    ),
-                  ),
-                  DropdownButtonFormField<String>(
-                    value: _dongSelected,
-                    items: _dongOptions
-                        .map(
-                          (dong) => DropdownMenuItem(
-                            value: dong,
-                            child: Text(dong),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: _loadingDongs
-                        ? null
-                        : (value) {
-                            setState(() {
-                              _dongSelected = value;
-                              _regionError = null;
-                            });
-                          },
-                    decoration: _fieldDecoration(
-                      _loadingDongs ? '동/읍/면 불러오는 중...' : '동/읍/면 선택',
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  _RegionStatus(
-                    districts: _districtOptions.length,
-                    dongs: _dongOptions.length,
-                    loadingDistricts: _loadingDistricts,
-                    loadingDongs: _loadingDongs,
-                    error: _regionError,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            _SectionCard(
-              title: _schoolInfoTitle,
-              child: Column(
-                children: [
-                  TextField(
-                    controller: _schoolController,
-                    decoration: _fieldDecoration(_schoolNameHint),
-                  ),
-                  if (isElementary || isMiddle) ...[
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _NumberPickerField(
-                            label: '학년',
-                            value: _grade,
-                            max: isElementary ? 6 : 3,
-                            onChanged: (value) {
-                              setState(() {
-                                _grade = value;
-                              });
-                            },
+                          decoration: _fieldDecoration('시/도 선택'),
+                        ),
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<String>(
+                          value: _districtSelected,
+                          items: _districtOptions
+                              .map(
+                                (district) => DropdownMenuItem(
+                                  value: district,
+                                  child: Text(district),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: _loadingDistricts
+                              ? null
+                              : (value) {
+                                  setState(() {
+                                    _districtSelected = value;
+                                    _dongSelected = null;
+                                    _dongOptions = [];
+                                    _regionError = null;
+                                  });
+                                  final province = _province;
+                                  if (province != null && value != null) {
+                                    _loadDongs(province.apiName, value);
+                                  }
+                                },
+                          decoration: _fieldDecoration(
+                            _loadingDistricts ? '시/군/구 불러오는 중...' : '시/군/구 선택',
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _NumberPickerField(
-                            label: '반',
-                            value: _classNumber,
-                            max: 20,
-                            onChanged: (value) {
-                              setState(() {
-                                _classNumber = value;
-                              });
-                            },
+                        DropdownButtonFormField<String>(
+                          value: _dongSelected,
+                          items: _dongOptions
+                              .map(
+                                (dong) => DropdownMenuItem(
+                                  value: dong,
+                                  child: Text(dong),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: _loadingDongs
+                              ? null
+                              : (value) {
+                                  setState(() {
+                                    _dongSelected = value;
+                                    _regionError = null;
+                                  });
+                                },
+                          decoration: _fieldDecoration(
+                            _loadingDongs ? '동/읍/면 불러오는 중...' : '동/읍/면 선택',
                           ),
+                        ),
+                        const SizedBox(height: 8),
+                        _RegionStatus(
+                          districts: _districtOptions.length,
+                          dongs: _dongOptions.length,
+                          loadingDistricts: _loadingDistricts,
+                          loadingDongs: _loadingDongs,
+                          error: _regionError,
                         ),
                       ],
                     ),
-                  ],
-                  if (isUniversity) ...[
+                  ),
+                  const SizedBox(height: 12),
+                  _SectionCard(
+                    title: _schoolInfoTitle,
+                    child: Column(
+                      children: [
+                        TextField(
+                          controller: _schoolController,
+                          decoration: _fieldDecoration(_schoolNameHint),
+                        ),
+                  if (isElementary || isMiddle || isHigh) ...[
                     const SizedBox(height: 10),
-                    TextField(
-                      controller: _majorController,
-                      decoration: _fieldDecoration('학과 입력'),
+                    Column(
+                            children: _gradeEntries
+                                .map(
+                                  (entry) => Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: _GradeRow(
+                                      entry: entry,
+                                      maxClass: 20,
+                                      onChanged: (updated) {
+                                        setState(() {
+                                          final index = _gradeEntries
+                                              .indexWhere((e) => e.grade == updated.grade);
+                                          if (index >= 0) {
+                                            _gradeEntries[index] = updated;
+                                          }
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                        ],
+                        if (isKindergarten) ...[
+                          const SizedBox(height: 10),
+                          _NumberPickerField(
+                            label: '졸업년도',
+                            value: _kindergartenGradYear,
+                            max: 0,
+                            yearsMode: true,
+                            onChanged: (value) {
+                              setState(() {
+                                _kindergartenGradYear = value;
+                              });
+                            },
+                          ),
+                        ],
+                        if (isUniversity) ...[
+                          const SizedBox(height: 10),
+                          TextField(
+                            controller: _majorController,
+                            decoration: _fieldDecoration('학과 입력'),
+                          ),
+                          const SizedBox(height: 10),
+                          _NumberPickerField(
+                            label: '학번(입학년도)',
+                            value: _universityEntryYear,
+                            max: 0,
+                            yearsMode: true,
+                            onChanged: (value) {
+                              setState(() {
+                                _universityEntryYear = value;
+                              });
+                            },
+                          ),
+                        ],
+                      ],
                     ),
-                  ],
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      onPressed: _save,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFF6A3D),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: const Text(
+                        '저장하기',
+                        style:
+                            TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: ElevatedButton(
-                onPressed: _save,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF6A3D),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  elevation: 0,
-                ),
-                child: const Text(
-                  '저장하기',
-                  style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
-                ),
-              ),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -574,10 +1230,17 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
       _showError('학교 종류와 지역, 학교 이름을 입력해주세요.');
       return;
     }
-    if ((_level == _SchoolLevel.elementary || _level == _SchoolLevel.middle) &&
-        (_grade <= 0 || _classNumber <= 0)) {
-      _showError('학년과 반을 선택해주세요.');
+    if ((_level == _SchoolLevel.elementary || _level == _SchoolLevel.middle || _level == _SchoolLevel.high) &&
+        _gradeEntries.any((entry) => entry.year <= 0)) {
+      _showError('학년별 년도를 모두 선택해주세요.');
       return;
+    }
+    if (_level == _SchoolLevel.elementary || _level == _SchoolLevel.middle || _level == _SchoolLevel.high) {
+      final expected = _level == _SchoolLevel.elementary ? 6 : 3;
+      if (_gradeEntries.length != expected) {
+        _showError('학년 정보를 모두 입력해주세요.');
+        return;
+      }
     }
     if (_level == _SchoolLevel.university &&
         _majorController.text.trim().isEmpty) {
@@ -587,18 +1250,24 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
 
     Navigator.of(context).pop(
       _SchoolRecord(
+        id: widget.initialRecord?.id ?? '',
         level: _level,
         province: _province!.label,
         district: _districtSelected ?? '',
         dong: _dongSelected ?? '',
         name: _schoolController.text.trim(),
-        grade: _level == _SchoolLevel.elementary || _level == _SchoolLevel.middle
-            ? _grade
+        grade: null,
+        classNumber: null,
+        year: null,
+        gradeEntries: _level == _SchoolLevel.elementary || _level == _SchoolLevel.middle || _level == _SchoolLevel.high
+            ? List<_GradeEntry>.from(_gradeEntries)
             : null,
-        classNumber:
-            _level == _SchoolLevel.elementary || _level == _SchoolLevel.middle
-                ? _classNumber
-                : null,
+        kindergartenGradYear: _level == _SchoolLevel.kindergarten
+            ? _kindergartenGradYear
+            : null,
+        universityEntryYear: _level == _SchoolLevel.university
+            ? _universityEntryYear
+            : null,
         major: _level == _SchoolLevel.university
             ? _majorController.text.trim()
             : null,
@@ -626,6 +1295,14 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
       }
       setState(() {
         _districtOptions = districts;
+        if (_presetDistrict != null && districts.contains(_presetDistrict)) {
+          _districtSelected = _presetDistrict;
+          _presetDistrict = null;
+          final provinceOption = _province;
+          if (provinceOption != null && _districtSelected != null) {
+            _loadDongs(provinceOption.apiName, _districtSelected!);
+          }
+        }
         if (districts.isEmpty) {
           _regionError = '시/군/구 결과가 없습니다. ($province)';
         }
@@ -667,6 +1344,10 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
       }
       setState(() {
         _dongOptions = dongs;
+        if (_presetDong != null && dongs.contains(_presetDong)) {
+          _dongSelected = _presetDong;
+          _presetDong = null;
+        }
         if (dongs.isEmpty) {
           _regionError = '동/읍/면 결과가 없습니다. ($query)';
         }
@@ -858,6 +1539,8 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
         return '초등학교 정보';
       case _SchoolLevel.middle:
         return '중학교 정보';
+      case _SchoolLevel.high:
+        return '고등학교 정보';
       case _SchoolLevel.university:
         return '대학교 정보';
     }
@@ -871,6 +1554,8 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
         return '초등학교 이름 입력';
       case _SchoolLevel.middle:
         return '중학교 이름 입력';
+      case _SchoolLevel.high:
+        return '고등학교 이름 입력';
       case _SchoolLevel.university:
         return '대학교 이름 입력';
     }
@@ -911,12 +1596,14 @@ class _NumberPickerField extends StatelessWidget {
     required this.value,
     required this.max,
     required this.onChanged,
+    this.yearsMode = false,
   });
 
   final String label;
   final int value;
   final int max;
   final ValueChanged<int> onChanged;
+  final bool yearsMode;
 
   @override
   Widget build(BuildContext context) {
@@ -945,13 +1632,15 @@ class _NumberPickerField extends StatelessWidget {
           value: value,
           isDense: true,
           isExpanded: true,
-          items: List.generate(
-            max,
-            (index) => DropdownMenuItem(
-              value: index + 1,
-              child: Text('${index + 1}'),
-            ),
-          ),
+          items: yearsMode
+              ? _yearItems()
+              : List.generate(
+                  max,
+                  (index) => DropdownMenuItem(
+                    value: index + 1,
+                    child: Text('${index + 1}'),
+                  ),
+                ),
           onChanged: (next) {
             if (next == null) {
               return;
@@ -962,7 +1651,23 @@ class _NumberPickerField extends StatelessWidget {
       ),
     );
   }
+
+  List<DropdownMenuItem<int>> _yearItems() {
+    final current = DateTime.now().year;
+    final start = current - 80;
+    return List.generate(
+      81,
+      (index) {
+        final year = start + index;
+        return DropdownMenuItem(
+          value: year,
+          child: Text('$year'),
+        );
+      },
+    ).reversed.toList();
+  }
 }
+
 
 class _SectionCard extends StatelessWidget {
   const _SectionCard({required this.title, required this.child});
@@ -1041,9 +1746,15 @@ class _RegionStatus extends StatelessWidget {
 }
 
 class _SchoolCard extends StatelessWidget {
-  const _SchoolCard({required this.record});
+  const _SchoolCard({
+    required this.record,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
   final _SchoolRecord record;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1105,7 +1816,26 @@ class _SchoolCard extends StatelessWidget {
               ],
             ),
           ),
-          const Icon(Icons.edit_rounded, color: Color(0xFFBDBDBD)),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert_rounded, color: Color(0xFFBDBDBD)),
+            onSelected: (value) {
+              if (value == 'edit') {
+                onEdit();
+              } else if (value == 'delete') {
+                onDelete();
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'edit',
+                child: Text('수정'),
+              ),
+              PopupMenuItem(
+                value: 'delete',
+                child: Text('삭제'),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -1113,21 +1843,36 @@ class _SchoolCard extends StatelessWidget {
 }
 
 enum _SchoolLevel {
-  kindergarten('유치원', Icons.emoji_people_rounded, Color(0xFFE8F7FF), Color(0xFF2C6BFF)),
-  elementary('초등학교', Icons.school_rounded, Color(0xFFEFF7FF), Color(0xFF3A8DFF)),
-  middle('중학교', Icons.menu_book_rounded, Color(0xFFEAFBF1), Color(0xFF22C55E)),
-  university('대학교', Icons.workspace_premium_rounded, Color(0xFFFFF3E9), Color(0xFFFF7A3D));
+  kindergarten('유치원', 'kindergarten', Icons.toys_rounded, Color(0xFFFFF4F7), Color(0xFFFF7AA2)),
+  elementary('초등학교', 'elementary', Icons.auto_stories_rounded, Color(0xFFEFF7FF), Color(0xFF3A8DFF)),
+  middle('중학교', 'middle', Icons.menu_book_rounded, Color(0xFFEAFBF1), Color(0xFF22C55E)),
+  high('고등학교', 'high', Icons.school_rounded, Color(0xFFF1F1FF), Color(0xFF6D5BD0)),
+  university('대학교', 'university', Icons.apartment_rounded, Color(0xFFFFF3E9), Color(0xFFFF7A3D));
 
-  const _SchoolLevel(this.label, this.icon, this.tint, this.iconColor);
+  const _SchoolLevel(this.label, this.key, this.icon, this.tint, this.iconColor);
 
   final String label;
+  final String key;
   final IconData icon;
   final Color tint;
   final Color iconColor;
+
+  static _SchoolLevel? fromKey(String? key) {
+    if (key == null) {
+      return null;
+    }
+    for (final level in _SchoolLevel.values) {
+      if (level.key == key) {
+        return level;
+      }
+    }
+    return null;
+  }
 }
 
 class _SchoolRecord {
   _SchoolRecord({
+    required this.id,
     required this.level,
     required this.province,
     required this.district,
@@ -1135,9 +1880,14 @@ class _SchoolRecord {
     required this.name,
     this.grade,
     this.classNumber,
+    this.year,
+    this.gradeEntries,
+    this.kindergartenGradYear,
+    this.universityEntryYear,
     this.major,
   });
 
+  final String id;
   final _SchoolLevel level;
   final String province;
   final String district;
@@ -1145,7 +1895,75 @@ class _SchoolRecord {
   final String name;
   final int? grade;
   final int? classNumber;
+  final int? year;
+  final List<_GradeEntry>? gradeEntries;
+  final int? kindergartenGradYear;
+  final int? universityEntryYear;
   final String? major;
+
+  _SchoolRecord copyWith({
+    String? id,
+    _SchoolLevel? level,
+    String? province,
+    String? district,
+    String? dong,
+    String? name,
+    int? grade,
+    int? classNumber,
+    int? year,
+    List<_GradeEntry>? gradeEntries,
+    int? kindergartenGradYear,
+    int? universityEntryYear,
+    String? major,
+  }) {
+    return _SchoolRecord(
+      id: id ?? this.id,
+      level: level ?? this.level,
+      province: province ?? this.province,
+      district: district ?? this.district,
+      dong: dong ?? this.dong,
+      name: name ?? this.name,
+      grade: grade ?? this.grade,
+      classNumber: classNumber ?? this.classNumber,
+      year: year ?? this.year,
+      gradeEntries: gradeEntries ?? this.gradeEntries,
+      kindergartenGradYear: kindergartenGradYear ?? this.kindergartenGradYear,
+      universityEntryYear: universityEntryYear ?? this.universityEntryYear,
+      major: major ?? this.major,
+    );
+  }
+
+  static _SchoolRecord? fromFirestore(
+    String id,
+    Map<String, dynamic> data,
+  ) {
+    final level = _SchoolLevel.fromKey(data['level'] as String?);
+    if (level == null) {
+      return null;
+    }
+    final name = data['name'] as String?;
+    final province = data['province'] as String?;
+    final district = data['district'] as String?;
+    final dong = data['dong'] as String?;
+    if (name == null || province == null || district == null || dong == null) {
+      return null;
+    }
+    return _SchoolRecord(
+      id: id,
+      level: level,
+      name: name,
+      province: province,
+      district: district,
+      dong: dong,
+      grade: (data['grade'] as num?)?.toInt(),
+      classNumber: (data['classNumber'] as num?)?.toInt(),
+      year: (data['year'] as num?)?.toInt(),
+      gradeEntries: _GradeEntry.fromFirestoreList(data['gradeEntries']),
+      kindergartenGradYear: (data['kindergartenGradYear'] as num?)?.toInt(),
+      universityEntryYear: (data['universityEntryYear'] as num?)?.toInt(),
+      major: data['major'] as String?,
+    );
+  }
 
   String get locationLabel {
     final parts = [province, district, dong].where((value) => value.isNotEmpty);
@@ -1162,9 +1980,23 @@ class _SchoolRecord {
 
   String get footer {
     if (level == _SchoolLevel.university) {
-      return major ?? '';
+      final entry = universityEntryYear != null ? '${universityEntryYear}학번' : '';
+      if ((major ?? '').isNotEmpty && entry.isNotEmpty) {
+        return '${major!} · $entry';
+      }
+      return (major ?? '').isNotEmpty ? major! : entry;
+    }
+    if (level == _SchoolLevel.kindergarten) {
+      return kindergartenGradYear != null ? '${kindergartenGradYear}년 졸업' : '';
+    }
+    if (gradeEntries != null && gradeEntries!.isNotEmpty) {
+      final range = '${gradeEntries!.first.grade}~${gradeEntries!.last.grade}학년';
+      return '$range 기록';
     }
     if (grade != null && classNumber != null) {
+      if (year != null) {
+        return '$grade학년 $classNumber반 · ${year}년';
+      }
       return '$grade학년 $classNumber반';
     }
     return '';
@@ -1176,4 +2008,553 @@ class _ProvinceOption {
 
   final String label;
   final String apiName;
+}
+
+class _MediaItem {
+  _MediaItem({
+    required this.isVideo,
+    this.file,
+    this.id,
+    this.url,
+    this.thumbnailUrl,
+    this.storagePath,
+    this.thumbnailPath,
+    this.uploading = false,
+    this.uploadFailed = false,
+    this.uploadProgress = 0,
+  });
+
+  factory _MediaItem.local({required XFile file, required bool isVideo}) {
+    return _MediaItem(
+      file: file,
+      isVideo: isVideo,
+      uploading: true,
+      uploadProgress: 0,
+    );
+  }
+
+  factory _MediaItem.fromFirestore(String id, Map<String, dynamic> data) {
+    return _MediaItem(
+      id: id,
+      isVideo: data['isVideo'] == true,
+      url: data['url'] as String?,
+      thumbnailUrl: data['thumbnailUrl'] as String?,
+      storagePath: data['storagePath'] as String?,
+      thumbnailPath: data['thumbnailPath'] as String?,
+      uploading: false,
+      uploadProgress: 1.0,
+    );
+  }
+
+  final XFile? file;
+  final bool isVideo;
+  String? id;
+  String? url;
+  String? thumbnailUrl;
+  String? storagePath;
+  String? thumbnailPath;
+  bool uploading;
+  bool uploadFailed;
+  double uploadProgress;
+}
+
+class _PhotoTab extends StatelessWidget {
+  const _PhotoTab({
+    required this.items,
+    required this.onUploadTap,
+    required this.onFileSelectTap,
+    required this.loading,
+    required this.error,
+    required this.onDeleteTap,
+  });
+
+  final List<_MediaItem> items;
+  final VoidCallback onUploadTap;
+  final VoidCallback onFileSelectTap;
+  final bool loading;
+  final String? error;
+  final ValueChanged<_MediaItem> onDeleteTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _PhotoHeader(onUploadTap: onUploadTap),
+        const SizedBox(height: 16),
+        _UploadCard(onTap: onFileSelectTap),
+        if (loading)
+          const Padding(
+            padding: EdgeInsets.only(top: 16),
+            child: _EmptyHint(
+              icon: Icons.hourglass_bottom_rounded,
+              title: '사진을 불러오는 중이에요',
+              subtitle: '잠시만 기다려주세요',
+            ),
+          )
+        else if (error != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 16),
+            child: _EmptyHint(
+              icon: Icons.error_outline_rounded,
+              title: '사진을 불러오지 못했어요',
+              subtitle: error!,
+            ),
+          )
+        else if (items.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _MediaGrid(items: items, onDeleteTap: onDeleteTap),
+        ],
+      ],
+    );
+  }
+}
+
+class _PhotoHeader extends StatelessWidget {
+  const _PhotoHeader({required this.onUploadTap});
+
+  final VoidCallback onUploadTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFEEF4),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Icon(Icons.photo_camera_rounded, color: Color(0xFFFF4D88)),
+        ),
+        const SizedBox(width: 10),
+        const Text(
+          '사진 & 동영상',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        const Spacer(),
+        ElevatedButton.icon(
+          onPressed: onUploadTap,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFFF4D88),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            elevation: 0,
+          ),
+          icon: const Icon(Icons.add, size: 18, color: Colors.white),
+          label: const Text(
+            '업로드',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _UploadCard extends StatelessWidget {
+  const _UploadCard({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _DashedBorderBox(
+      borderRadius: 20,
+      dashWidth: 8,
+      dashGap: 6,
+      color: const Color(0xFFFFB4CC),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Column(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFEEF4),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: const Icon(Icons.photo_camera_rounded,
+                  color: Color(0xFFFF4D88), size: 28),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              '사진과 동영상을 업로드하세요',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              '소중한 추억들을 사진과 동영상으로 보관해보세요',
+              style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: onTap,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF4D88),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                elevation: 0,
+              ),
+              child: const Text(
+                '파일 선택하기',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MediaGrid extends StatelessWidget {
+  const _MediaGrid({required this.items, required this.onDeleteTap});
+
+  final List<_MediaItem> items;
+  final ValueChanged<_MediaItem> onDeleteTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: items.length,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+        childAspectRatio: 1,
+      ),
+      itemBuilder: (context, index) {
+        final item = items[index];
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            color: const Color(0xFFF7F7F7),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                _MediaPreview(item: item),
+                if (item.isVideo)
+                  const Align(
+                    alignment: Alignment.center,
+                    child: Icon(Icons.play_circle_fill_rounded,
+                        color: Colors.white, size: 36),
+                  ),
+                if (item.uploading)
+                  Container(
+                    color: Colors.black.withOpacity(0.45),
+                    child: Center(
+                      child: SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: CircularProgressIndicator(
+                          value: item.uploadProgress > 0 && item.uploadProgress < 1
+                              ? item.uploadProgress
+                              : null,
+                          color: Colors.white,
+                          strokeWidth: 3,
+                        ),
+                      ),
+                    ),
+                  ),
+                if (item.uploadFailed)
+                  Container(
+                    color: Colors.black.withOpacity(0.4),
+                    child: const Center(
+                      child: Icon(Icons.error_outline_rounded,
+                          color: Colors.white, size: 32),
+                    ),
+                  ),
+                Positioned(
+                  top: 6,
+                  right: 6,
+                  child: GestureDetector(
+                    onTap: () => onDeleteTap(item),
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.55),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.close, size: 14, color: Colors.white),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _MediaPreview extends StatelessWidget {
+  const _MediaPreview({required this.item});
+
+  final _MediaItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    if (item.isVideo) {
+      if (item.thumbnailUrl != null) {
+        return Image.network(item.thumbnailUrl!, fit: BoxFit.cover);
+      }
+      if (item.file != null && !kIsWeb) {
+        return Image.file(File(item.file!.path), fit: BoxFit.cover);
+      }
+      return const SizedBox.shrink();
+    }
+    if (item.url != null) {
+      return Image.network(item.url!, fit: BoxFit.cover);
+    }
+    if (item.file == null) {
+      return const SizedBox.shrink();
+    }
+    if (kIsWeb) {
+      return Image.network(item.file!.path, fit: BoxFit.cover);
+    }
+    return Image.file(File(item.file!.path), fit: BoxFit.cover);
+  }
+}
+
+class _DashedBorderBox extends StatelessWidget {
+  const _DashedBorderBox({
+    required this.child,
+    required this.color,
+    this.borderRadius = 16,
+    this.dashWidth = 6,
+    this.dashGap = 4,
+  });
+
+  final Widget child;
+  final Color color;
+  final double borderRadius;
+  final double dashWidth;
+  final double dashGap;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _DashedBorderPainter(
+        color: color,
+        radius: borderRadius,
+        dashWidth: dashWidth,
+        dashGap: dashGap,
+      ),
+      child: child,
+    );
+  }
+}
+
+class _DashedBorderPainter extends CustomPainter {
+  _DashedBorderPainter({
+    required this.color,
+    required this.radius,
+    required this.dashWidth,
+    required this.dashGap,
+  });
+
+  final Color color;
+  final double radius;
+  final double dashWidth;
+  final double dashGap;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4;
+    final rrect = RRect.fromRectAndRadius(
+      Offset.zero & size,
+      Radius.circular(radius),
+    );
+    final path = Path()..addRRect(rrect);
+    final metrics = path.computeMetrics().toList();
+    if (metrics.isEmpty) {
+      return;
+    }
+    final metric = metrics.first;
+    double distance = 0;
+    while (distance < metric.length) {
+      final length = dashWidth;
+      final next = distance + length;
+      canvas.drawPath(metric.extractPath(distance, next), paint);
+      distance = next + dashGap;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DashedBorderPainter oldDelegate) {
+    return oldDelegate.color != color ||
+        oldDelegate.radius != radius ||
+        oldDelegate.dashWidth != dashWidth ||
+        oldDelegate.dashGap != dashGap;
+  }
+}
+
+class _GradeEntry {
+  _GradeEntry({
+    required this.grade,
+    required this.year,
+    this.classNumber,
+  });
+
+  final int grade;
+  final int year;
+  final int? classNumber;
+
+  _GradeEntry copyWith({
+    int? grade,
+    int? year,
+    int? classNumber,
+  }) {
+    return _GradeEntry(
+      grade: grade ?? this.grade,
+      year: year ?? this.year,
+      classNumber: classNumber ?? this.classNumber,
+    );
+  }
+
+  Map<String, dynamic> toFirestore() {
+    return {
+      'grade': grade,
+      'year': year,
+      'classNumber': classNumber,
+    };
+  }
+
+  static List<_GradeEntry>? fromFirestoreList(dynamic value) {
+    if (value is! List) {
+      return null;
+    }
+    final entries = value
+        .whereType<Map>()
+        .map((entry) {
+          final grade = (entry['grade'] as num?)?.toInt();
+          final year = (entry['year'] as num?)?.toInt();
+          if (grade == null || year == null) {
+            return null;
+          }
+          return _GradeEntry(
+            grade: grade,
+            year: year,
+            classNumber: (entry['classNumber'] as num?)?.toInt(),
+          );
+        })
+        .whereType<_GradeEntry>()
+        .toList();
+    if (entries.isEmpty) {
+      return null;
+    }
+    entries.sort((a, b) => a.grade.compareTo(b.grade));
+    return entries;
+  }
+}
+
+class _GradeRow extends StatelessWidget {
+  const _GradeRow({
+    required this.entry,
+    required this.maxClass,
+    required this.onChanged,
+  });
+
+  final _GradeEntry entry;
+  final int maxClass;
+  final ValueChanged<_GradeEntry> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9F7FF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFEDE6FF)),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 56,
+            child: Text(
+              '${entry.grade}학년',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<int>(
+                key: ValueKey('grade-${entry.grade}-class-${entry.classNumber ?? -1}'),
+                value: entry.classNumber ?? -1,
+                isDense: true,
+                isExpanded: true,
+                items: [
+                  const DropdownMenuItem<int>(
+                    value: -1,
+                    child: Text('모름'),
+                  ),
+                  ...List.generate(
+                    maxClass,
+                    (index) => DropdownMenuItem<int>(
+                      value: index + 1,
+                      child: Text('${index + 1}반'),
+                    ),
+                  ),
+                ],
+                onChanged: (value) {
+                  if (value == null) {
+                    return;
+                  }
+                  onChanged(entry.copyWith(classNumber: value == -1 ? null : value));
+                },
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<int>(
+                value: entry.year,
+                isDense: true,
+                isExpanded: true,
+                items: _yearItems(),
+                onChanged: (value) {
+                  if (value == null) {
+                    return;
+                  }
+                  onChanged(entry.copyWith(year: value));
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<DropdownMenuItem<int>> _yearItems() {
+    final current = DateTime.now().year;
+    final start = current - 80;
+    return List.generate(
+      81,
+      (index) {
+        final year = start + index;
+        return DropdownMenuItem(
+          value: year,
+          child: Text('$year년'),
+        );
+      },
+    ).reversed.toList();
+  }
 }
