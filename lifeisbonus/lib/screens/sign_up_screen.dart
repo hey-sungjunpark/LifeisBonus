@@ -21,6 +21,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
   bool _isVerifying = false;
   bool _smsCodeSent = false;
   bool _phoneVerified = false;
+  bool _isCheckingNickname = false;
+  bool _isNicknameChecked = false;
+  String? _lastCheckedNickname;
   String? _phoneVerificationId;
   final _birthFieldKey = GlobalKey();
   String _countryCode = '+82';
@@ -30,6 +33,38 @@ class _SignUpScreenState extends State<SignUpScreen> {
   final _phoneCodeController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
+  final _nicknameController = TextEditingController();
+
+  static final RegExp _nicknamePattern = RegExp(r'^[a-zA-Z0-9가-힣]+$');
+  static const int _minNicknameLength = 2;
+  static const int _maxNicknameLength = 12;
+  static const List<String> _forbiddenNicknames = [
+    'admin',
+    'administrator',
+    'root',
+    'system',
+    'support',
+    'operator',
+    'test',
+    '운영자',
+    '관리자',
+    '시스템',
+    '테스트',
+    '고객센터',
+    '바보',
+    '병신',
+    '개새끼',
+    '새끼',
+    '섹스',
+    '섹',
+    '욕',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _nicknameController.addListener(_onNicknameChanged);
+  }
 
   @override
   void dispose() {
@@ -38,6 +73,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
     _phoneCodeController.dispose();
     _passwordController.dispose();
     _confirmController.dispose();
+    _nicknameController.removeListener(_onNicknameChanged);
+    _nicknameController.dispose();
     super.dispose();
   }
 
@@ -489,6 +526,16 @@ class _SignUpScreenState extends State<SignUpScreen> {
         return;
       }
     }
+    final nickname = _nicknameController.text.trim();
+    if (nickname.isEmpty) {
+      _showMessage('닉네임을 입력해주세요.');
+      return;
+    }
+    final validationMessage = _validateNickname(nickname);
+    if (validationMessage != null) {
+      _showMessage(validationMessage);
+      return;
+    }
     if (_birthDate == null) {
       _showMessage('생년월일을 선택해주세요.');
       return;
@@ -503,10 +550,21 @@ class _SignUpScreenState extends State<SignUpScreen> {
         _showMessage('회원 정보가 없습니다. 인증을 다시 시도해주세요.');
         return;
       }
+      if (!_isNicknameChecked || _lastCheckedNickname != nickname) {
+        final available = await _isNicknameAvailable(nickname, user.uid);
+        if (!available) {
+          _showMessage('이미 사용 중인 닉네임입니다.');
+          return;
+        }
+        _isNicknameChecked = true;
+        _lastCheckedNickname = nickname;
+      }
       if (_methodIndex == 0) {
         await user.updatePassword(_passwordController.text);
         await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
           'email': _emailController.text.trim(),
+          'displayName': nickname,
+          'displayNameLower': nickname.toLowerCase(),
           'birthDate': _birthDate!.toIso8601String(),
           'createdAt': FieldValue.serverTimestamp(),
           'method': 'email',
@@ -514,6 +572,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
       } else {
         await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
           'phone': _normalizePhoneNumber(_phoneController.text.trim()),
+          'displayName': nickname,
+          'displayNameLower': nickname.toLowerCase(),
           'birthDate': _birthDate!.toIso8601String(),
           'createdAt': FieldValue.serverTimestamp(),
           'method': 'phone',
@@ -556,6 +616,81 @@ class _SignUpScreenState extends State<SignUpScreen> {
     );
   }
 
+  void _onNicknameChanged() {
+    final current = _nicknameController.text.trim();
+    if (_lastCheckedNickname == null || current != _lastCheckedNickname) {
+      _isNicknameChecked = false;
+    }
+  }
+
+  String? _validateNickname(String nickname) {
+    if (nickname.length < _minNicknameLength ||
+        nickname.length > _maxNicknameLength) {
+      return '닉네임은 $_minNicknameLength~$_maxNicknameLength자여야 합니다.';
+    }
+    if (!_nicknamePattern.hasMatch(nickname)) {
+      return '닉네임은 한글/영문/숫자만 사용할 수 있어요.';
+    }
+    final lowered = nickname.toLowerCase();
+    for (final word in _forbiddenNicknames) {
+      if (lowered.contains(word.toLowerCase())) {
+        return '사용할 수 없는 닉네임입니다.';
+      }
+    }
+    return null;
+  }
+
+  Future<bool> _isNicknameAvailable(
+    String nickname,
+    String currentDocId,
+  ) async {
+    final users = FirebaseFirestore.instance.collection('users');
+    final normalized = nickname.toLowerCase();
+    final lowerSnap =
+        await users.where('displayNameLower', isEqualTo: normalized).get();
+    for (final doc in lowerSnap.docs) {
+      if (doc.id != currentDocId) {
+        return false;
+      }
+    }
+    final exactSnap =
+        await users.where('displayName', isEqualTo: nickname).get();
+    for (final doc in exactSnap.docs) {
+      if (doc.id != currentDocId) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Future<void> _checkNicknameAvailability() async {
+    final nickname = _nicknameController.text.trim();
+    if (nickname.isEmpty) {
+      _showMessage('닉네임을 입력해주세요.');
+      return;
+    }
+    final validationMessage = _validateNickname(nickname);
+    if (validationMessage != null) {
+      _showMessage(validationMessage);
+      return;
+    }
+    setState(() {
+      _isCheckingNickname = true;
+    });
+    final user = FirebaseAuth.instance.currentUser;
+    final currentId = user?.uid ?? '';
+    final available = await _isNicknameAvailable(nickname, currentId);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isCheckingNickname = false;
+      _isNicknameChecked = available;
+      _lastCheckedNickname = available ? nickname : null;
+    });
+    _showMessage(available ? '사용 가능한 닉네임입니다.' : '이미 사용 중인 닉네임입니다.');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -595,6 +730,10 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   phoneCodeController: _phoneCodeController,
                   passwordController: _passwordController,
                   confirmController: _confirmController,
+                  nicknameController: _nicknameController,
+                  isCheckingNickname: _isCheckingNickname,
+                  isNicknameChecked: _isNicknameChecked,
+                  onCheckNickname: _checkNicknameAvailability,
                   birthDateLabel: _birthDateLabel,
                   onPickBirthDate: _pickBirthDate,
                   birthFieldKey: _birthFieldKey,
@@ -808,6 +947,10 @@ class _SignUpCard extends StatelessWidget {
     required this.phoneCodeController,
     required this.passwordController,
     required this.confirmController,
+    required this.nicknameController,
+    required this.isCheckingNickname,
+    required this.isNicknameChecked,
+    required this.onCheckNickname,
     required this.birthDateLabel,
     required this.onPickBirthDate,
     required this.birthFieldKey,
@@ -829,6 +972,10 @@ class _SignUpCard extends StatelessWidget {
   final TextEditingController phoneCodeController;
   final TextEditingController passwordController;
   final TextEditingController confirmController;
+  final TextEditingController nicknameController;
+  final bool isCheckingNickname;
+  final bool isNicknameChecked;
+  final VoidCallback onCheckNickname;
   final String birthDateLabel;
   final VoidCallback onPickBirthDate;
   final GlobalKey birthFieldKey;
@@ -1017,6 +1164,14 @@ class _SignUpCard extends StatelessWidget {
               enabled: emailVerified,
             ),
             const SizedBox(height: 10),
+            _NicknameRow(
+              controller: nicknameController,
+              enabled: emailVerified,
+              isChecking: isCheckingNickname,
+              isChecked: isNicknameChecked,
+              onCheck: onCheckNickname,
+            ),
+            const SizedBox(height: 10),
             KeyedSubtree(
               key: birthFieldKey,
               child: _LabeledField(
@@ -1102,6 +1257,14 @@ class _SignUpCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
+            _NicknameRow(
+              controller: nicknameController,
+              enabled: phoneVerified,
+              isChecking: isCheckingNickname,
+              isChecked: isNicknameChecked,
+              onCheck: onCheckNickname,
+            ),
+            const SizedBox(height: 10),
             KeyedSubtree(
               key: birthFieldKey,
               child: _LabeledField(
@@ -1181,6 +1344,102 @@ class _LabeledField extends StatelessWidget {
               borderSide: BorderSide.none,
             ),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+class _NicknameRow extends StatelessWidget {
+  const _NicknameRow({
+    required this.controller,
+    required this.enabled,
+    required this.isChecking,
+    required this.isChecked,
+    required this.onCheck,
+  });
+
+  final TextEditingController controller;
+  final bool enabled;
+  final bool isChecking;
+  final bool isChecked;
+  final VoidCallback onCheck;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '닉네임',
+          style: TextStyle(
+            fontSize: 12,
+            color: Color(0xFF6F6F6F),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: controller,
+                maxLength: _SignUpScreenState._maxNicknameLength,
+                enabled: enabled,
+                decoration: InputDecoration(
+                  hintText: '닉네임을 입력하세요',
+                  counterText: '',
+                  filled: true,
+                  fillColor: enabled ? const Color(0xFFF7F7F7) : const Color(0xFFEFEFEF),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            SizedBox(
+              height: 40,
+              child: OutlinedButton(
+                onPressed: enabled
+                    ? (isChecking ? null : onCheck)
+                    : null,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor:
+                      isChecked ? const Color(0xFF2FA66A) : const Color(0xFFFF7A3D),
+                  side: BorderSide(
+                    color: isChecked
+                        ? const Color(0xFF2FA66A)
+                        : const Color(0xFFFF7A3D),
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                child: isChecking
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : isChecked
+                        ? const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.check_circle, size: 14),
+                              SizedBox(width: 4),
+                              Text('확인됨'),
+                            ],
+                          )
+                        : const Text('중복체크'),
+              ),
+            ),
+          ],
         ),
       ],
     );

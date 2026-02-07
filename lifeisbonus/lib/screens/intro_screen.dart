@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'login_screen.dart';
 
@@ -14,6 +15,7 @@ class _IntroScreenState extends State<IntroScreen> {
   static const _normalDelay = Duration(seconds: 2);
   static const _highlightDelay = Duration(milliseconds: 2500);
   int _visibleLines = 0;
+  bool _hideForMonth = false;
 
   @override
   void initState() {
@@ -32,6 +34,24 @@ class _IntroScreenState extends State<IntroScreen> {
         _visibleLines = i;
       });
     }
+  }
+
+  Future<void> _handleStart() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_hideForMonth) {
+      final hideUntil = DateTime.now().add(const Duration(days: 30));
+      await prefs.setString('introHideUntil', hideUntil.toIso8601String());
+    } else {
+      await prefs.remove('introHideUntil');
+    }
+    if (!mounted) {
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const LoginScreen(),
+      ),
+    );
   }
 
   @override
@@ -61,14 +81,35 @@ class _IntroScreenState extends State<IntroScreen> {
                 ),
                 _PageDots(activeCount: _visibleLines),
                 const SizedBox(height: 18),
-                _StartButton(
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (context) => const LoginScreen(),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Checkbox(
+                      value: _hideForMonth,
+                      onChanged: (value) {
+                        setState(() {
+                          _hideForMonth = value ?? false;
+                        });
+                      },
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(6),
                       ),
-                    );
-                  },
+                      activeColor: const Color(0xFFFF7A3D),
+                    ),
+                    const SizedBox(width: 4),
+                    const Text(
+                      '1개월 동안 안보기',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF8A8A8A),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                _StartButton(
+                  onPressed: _handleStart,
                 ),
                 const SizedBox(height: 24),
               ],

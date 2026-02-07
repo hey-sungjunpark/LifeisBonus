@@ -1,6 +1,20 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    match /{path=**}/schools/{schoolId} {
+      allow read: if true;
+    }
+
+    match /threads/{threadId} {
+      allow read: if true;
+      allow create, update, delete: if true;
+
+      match /messages/{messageId} {
+        allow read: if true;
+        allow create, update, delete: if true;
+      }
+    }
+
     match /users/{userId} {
       allow read: if true;
       allow create, update: if (
@@ -14,6 +28,14 @@ service cloud.firestore {
         && request.resource.data.method == 'naver'
         && request.resource.data.birthDate is string
       );
+
+      match /blocks/{blockId} {
+        allow read, create, update, delete: if true;
+      }
+
+      match /reports/{reportId} {
+        allow read, create, update, delete: if true;
+      }
 
       match /schools/{schoolId} {
         allow read: if true;
@@ -43,6 +65,15 @@ service cloud.firestore {
       }
 
       match /memories/{memoryId} {
+        allow read: if true;
+        allow create, update, delete: if (
+          request.auth != null && request.auth.uid == userId
+        ) || (
+          userId.matches('^kakao:.*') || userId.matches('^naver:.*')
+        );
+      }
+
+      match /plans/{planId} {
         allow read: if true;
         allow create, update, delete: if (
           request.auth != null && request.auth.uid == userId

@@ -106,7 +106,9 @@ class _RecordScreenState extends State<RecordScreen> {
           ),
           const SizedBox(height: 16),
           if (_tabIndex == 0) ...[
-            _SchoolHeader(onAdd: _openAddSchool),
+            _SchoolHeader(
+              onAdd: _openAddSchool,
+            ),
             const SizedBox(height: 12),
             if (_loadingSchools)
               const _EmptyHint(
@@ -825,6 +827,35 @@ class _RecordScreenState extends State<RecordScreen> {
           .collection('schools')
           .orderBy('createdAt', descending: true)
           .get();
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final matchKeys = data['matchKeys'];
+        final record = _SchoolRecord.fromFirestore(doc.id, data);
+        if (record == null) {
+          continue;
+        }
+        final schoolKey = _buildSchoolKey(record);
+        final computedKeys = _buildSchoolMatchKeys(record, schoolKey);
+        final existingKeys = matchKeys is List
+            ? matchKeys.map((key) => key.toString()).toSet()
+            : <String>{};
+        final computedSet = computedKeys.toSet();
+        final needsUpdate =
+            (computedSet.isNotEmpty && existingKeys.isEmpty) ||
+            (computedSet.isNotEmpty &&
+                existingKeys.isNotEmpty &&
+                (existingKeys.length != computedSet.length ||
+                    !existingKeys.containsAll(computedSet))) ||
+            (data['schoolKey'] != null && data['schoolKey'] != schoolKey);
+        if (needsUpdate || (data['schoolKey'] == null && schoolKey.isNotEmpty)) {
+          await doc.reference.set({
+            'schoolKey': schoolKey,
+            'matchKeys': computedKeys,
+            'ownerId': userDocId,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+      }
       final records = snapshot.docs
           .map((doc) => _SchoolRecord.fromFirestore(doc.id, doc.data()))
           .whereType<_SchoolRecord>()
@@ -862,6 +893,7 @@ class _RecordScreenState extends State<RecordScreen> {
         return null;
       }
       final schoolKey = _buildSchoolKey(record);
+      final matchKeys = _buildSchoolMatchKeys(record, schoolKey);
       final data = {
         'level': record.level.key,
         'name': record.name,
@@ -878,6 +910,7 @@ class _RecordScreenState extends State<RecordScreen> {
         'universityEntryYear': record.universityEntryYear,
         'major': record.major,
         'schoolKey': schoolKey,
+        'matchKeys': matchKeys,
         'ownerId': userDocId,
         'updatedAt': FieldValue.serverTimestamp(),
       };
@@ -925,6 +958,26 @@ class _RecordScreenState extends State<RecordScreen> {
           .collection('neighborhoods')
           .orderBy('startYear', descending: false)
           .get();
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final record = _NeighborhoodRecord.fromFirestore(doc.id, data);
+        if (record == null) {
+          continue;
+        }
+        final matchKey = _buildNeighborhoodMatchKey(record);
+        final existingKey = data['matchKey'] as String?;
+        final needsUpdate =
+            existingKey == null ||
+            existingKey.isEmpty ||
+            (existingKey != matchKey && matchKey.isNotEmpty);
+        if (needsUpdate || data['ownerId'] == null) {
+          await doc.reference.set({
+            'matchKey': matchKey,
+            'ownerId': userDocId,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+      }
       final records = snapshot.docs
           .map((doc) => _NeighborhoodRecord.fromFirestore(doc.id, doc.data()))
           .whereType<_NeighborhoodRecord>()
@@ -963,6 +1016,7 @@ class _RecordScreenState extends State<RecordScreen> {
         _showSnack('로그인 정보가 없어 저장할 수 없어요.');
         return null;
       }
+      final matchKey = _buildNeighborhoodMatchKey(record);
       final data = {
         'province': record.province,
         'district': record.district,
@@ -974,6 +1028,8 @@ class _RecordScreenState extends State<RecordScreen> {
         'nickname': record.nickname,
         'moveReason': record.moveReason,
         'bestFriend': record.bestFriend,
+        'matchKey': matchKey,
+        'ownerId': userDocId,
         'updatedAt': FieldValue.serverTimestamp(),
       };
       if (record.id.isEmpty) {
@@ -1020,6 +1076,24 @@ class _RecordScreenState extends State<RecordScreen> {
           .collection('memories')
           .orderBy('date', descending: true)
           .get();
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final record = _MemoryRecord.fromFirestore(doc.id, data);
+        if (record == null) {
+          continue;
+        }
+        final matchKeys = _buildMemoryMatchKeys(record);
+        final needsUpdate =
+            (data['matchKeys'] is! List || (data['matchKeys'] as List).isEmpty) &&
+                matchKeys.isNotEmpty;
+        if (needsUpdate || data['ownerId'] == null) {
+          await doc.reference.set({
+            'matchKeys': matchKeys,
+            'ownerId': userDocId,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+      }
       final records = snapshot.docs
           .map((doc) => _MemoryRecord.fromFirestore(doc.id, doc.data()))
           .whereType<_MemoryRecord>()
@@ -1058,6 +1132,7 @@ class _RecordScreenState extends State<RecordScreen> {
         _showSnack('로그인 정보가 없어 저장할 수 없어요.');
         return null;
       }
+      final matchKeys = _buildMemoryMatchKeys(record);
       final data = {
         'title': record.title,
         'content': record.content,
@@ -1068,6 +1143,8 @@ class _RecordScreenState extends State<RecordScreen> {
         'song': record.song,
         'smell': record.smell,
         'weather': record.weather,
+        'matchKeys': matchKeys,
+        'ownerId': userDocId,
         'updatedAt': FieldValue.serverTimestamp(),
       };
       if (record.id.isEmpty) {
@@ -1095,30 +1172,141 @@ class _RecordScreenState extends State<RecordScreen> {
   }
 
   Future<String?> _resolveUserDocId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final provider = prefs.getString('lastProvider');
+    final providerId = prefs.getString('lastProviderId');
+    if (provider != null && providerId != null) {
+      if (provider == 'kakao' || provider == 'naver') {
+        return '$provider:$providerId';
+      }
+    }
     final authUser = FirebaseAuth.instance.currentUser;
     if (authUser != null) {
       return authUser.uid;
     }
-    final prefs = await SharedPreferences.getInstance();
-    final provider = prefs.getString('lastProvider');
-    final providerId = prefs.getString('lastProviderId');
     if (provider == null || providerId == null) {
       return null;
     }
-    return '$provider:$providerId';
+    return providerId;
+  }
+
+  String _normalizeMatchValue(String value) {
+    return value.trim().toLowerCase().replaceAll(' ', '').replaceAll('-', '');
+  }
+
+  String _normalizeProvince(String value) {
+    var normalized = _normalizeMatchValue(value);
+    if (normalized.isEmpty) {
+      return normalized;
+    }
+    const suffixes = [
+      '특별자치시',
+      '특별자치도',
+      '광역시',
+      '특별시',
+      '자치시',
+      '자치도',
+      '도',
+      '시',
+    ];
+    for (final suffix in suffixes) {
+      if (normalized.endsWith(suffix)) {
+        normalized = normalized.substring(0, normalized.length - suffix.length);
+        break;
+      }
+    }
+    return normalized;
+  }
+
+  String _normalizeDistrict(String value) {
+    var normalized = _normalizeMatchValue(value);
+    if (normalized.isEmpty) {
+      return normalized;
+    }
+    const suffixes = ['특별자치구', '자치구', '구', '군', '시'];
+    for (final suffix in suffixes) {
+      if (normalized.endsWith(suffix)) {
+        normalized = normalized.substring(0, normalized.length - suffix.length);
+        break;
+      }
+    }
+    return normalized;
+  }
+
+  String _normalizeDong(String value) {
+    var normalized = _normalizeMatchValue(value);
+    if (normalized.isEmpty) {
+      return normalized;
+    }
+    const suffixes = ['읍', '면', '동', '리'];
+    for (final suffix in suffixes) {
+      if (normalized.endsWith(suffix)) {
+        normalized = normalized.substring(0, normalized.length - suffix.length);
+        break;
+      }
+    }
+    return normalized;
+  }
+
+  String _buildNeighborhoodMatchKey(_NeighborhoodRecord record) {
+    final province = _normalizeProvince(record.province);
+    final district = _normalizeDistrict(record.district);
+    final dong = _normalizeDong(record.dong);
+    return '$province|$district|$dong';
+  }
+
+  List<String> _buildMemoryMatchKeys(_MemoryRecord record) {
+    final year = record.date.year;
+    final keys = <String>[];
+    final tags = record.tags?.whereType<String>().toList() ?? [];
+    if (tags.isNotEmpty) {
+      for (final tag in tags) {
+        final normalized = _normalizeMatchValue(tag);
+        if (normalized.isNotEmpty) {
+          keys.add('$year|$normalized');
+        }
+      }
+      return keys;
+    }
+    final title = _normalizeMatchValue(record.title);
+    if (title.isNotEmpty) {
+      keys.add('$year|$title');
+    }
+    return keys;
   }
 
   String _buildSchoolKey(_SchoolRecord record) {
-    String normalize(String value) =>
-        value.toLowerCase().replaceAll(' ', '').replaceAll('-', '');
     final parts = [
       record.level.key,
-      normalize(record.name),
-      normalize(record.province),
-      normalize(record.district),
-      normalize(record.dong),
+      _normalizeMatchValue(record.name),
+      _normalizeProvince(record.province),
+      _normalizeDistrict(record.district),
+      _normalizeDong(record.dong),
     ];
     return parts.join('|');
+  }
+
+  List<String> _buildSchoolMatchKeys(
+    _SchoolRecord record,
+    String schoolKey,
+  ) {
+    final keys = <String>[];
+    if (record.gradeEntries != null && record.gradeEntries!.isNotEmpty) {
+      for (final entry in record.gradeEntries!) {
+        if (entry.year != null &&
+            entry.classNumber != null &&
+            entry.classNumber != '모름') {
+          keys.add(
+            '$schoolKey|${entry.year}|${entry.grade}|${entry.classNumber}',
+          );
+        }
+      }
+    } else if (record.year != null &&
+        record.classNumber != null &&
+        record.classNumber != '모름') {
+      keys.add('$schoolKey|${record.year}|${record.grade}|${record.classNumber}');
+    }
+    return keys;
   }
 
   String? _fileExtension(String path) {
@@ -1247,7 +1435,9 @@ class _RecordScreenState extends State<RecordScreen> {
 }
 
 class _SchoolHeader extends StatelessWidget {
-  const _SchoolHeader({required this.onAdd});
+  const _SchoolHeader({
+    required this.onAdd,
+  });
 
   final VoidCallback onAdd;
 
@@ -3992,14 +4182,29 @@ class _SchoolRecord {
       province: province,
       district: district,
       dong: dong,
-      grade: (data['grade'] as num?)?.toInt(),
-      classNumber: (data['classNumber'] as num?)?.toInt(),
-      year: (data['year'] as num?)?.toInt(),
+      grade: _parseFlexibleInt(data['grade']),
+      classNumber: _parseFlexibleInt(data['classNumber']),
+      year: _parseFlexibleInt(data['year']),
       gradeEntries: _GradeEntry.fromFirestoreList(data['gradeEntries']),
-      kindergartenGradYear: (data['kindergartenGradYear'] as num?)?.toInt(),
-      universityEntryYear: (data['universityEntryYear'] as num?)?.toInt(),
+      kindergartenGradYear: _parseFlexibleInt(data['kindergartenGradYear']),
+      universityEntryYear: _parseFlexibleInt(data['universityEntryYear']),
       major: data['major'] as String?,
     );
+  }
+
+  static int? _parseFlexibleInt(dynamic value) {
+    if (value == null) {
+      return null;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    final text = value.toString().trim();
+    final digits = text.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.isEmpty) {
+      return null;
+    }
+    return int.tryParse(digits);
   }
 
   String get locationLabel {

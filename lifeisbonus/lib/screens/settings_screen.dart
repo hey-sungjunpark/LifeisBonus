@@ -1,4 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:kakao_flutter_sdk_user/kakao_flutter_sdk_user.dart';
+import 'package:flutter_naver_login/flutter_naver_login.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../app_theme.dart';
+import '../services/premium_service.dart';
+import 'login_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -10,9 +19,552 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _alertsEnabled = true;
   bool _darkMode = false;
+  bool _loadingProfile = true;
+  String? _nickname;
+  int? _age;
+  String? _userDocId;
+  PremiumStatus? _premiumStatus;
+  bool _loadingPremium = false;
+
+  static final RegExp _nicknamePattern = RegExp(r'^[a-zA-Z0-9가-힣]+$');
+  static const int _minNicknameLength = 2;
+  static const int _maxNicknameLength = 12;
+  static const List<String> _forbiddenNicknames = [
+    'admin',
+    'administrator',
+    'root',
+    'system',
+    'support',
+    'operator',
+    'test',
+    '운영자',
+    '관리자',
+    '시스템',
+    '테스트',
+    '고객센터',
+    '바보',
+    '병신',
+    '개새끼',
+    '새끼',
+    '섹스',
+    '섹',
+    '욕',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _darkMode = AppThemeController.mode.value == ThemeMode.dark;
+    _loadProfile();
+    _loadPremiumStatus();
+  }
+
+  Future<void> _loadProfile() async {
+    final docId = await _resolveUserDocId();
+    if (!mounted) {
+      return;
+    }
+    if (docId == null) {
+      setState(() {
+        _loadingProfile = false;
+      });
+      return;
+    }
+    _userDocId = docId;
+    try {
+      final doc =
+          await FirebaseFirestore.instance.collection('users').doc(docId).get();
+      final data = doc.data();
+      final displayName = data?['displayName'];
+      final birthDateValue = data?['birthDate'];
+      DateTime? birthDate;
+      if (birthDateValue is String) {
+        birthDate = DateTime.tryParse(birthDateValue);
+      }
+      setState(() {
+        _nickname = displayName is String ? displayName.trim() : null;
+        _age = birthDate == null ? null : _calculateAge(birthDate, DateTime.now());
+        _loadingProfile = false;
+      });
+    } catch (_) {
+      setState(() {
+        _loadingProfile = false;
+      });
+    }
+  }
+
+  Future<void> _loadPremiumStatus() async {
+    if (_loadingPremium) {
+      return;
+    }
+    setState(() {
+      _loadingPremium = true;
+    });
+    try {
+      final status = await PremiumService.fetchStatus();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _premiumStatus = status;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingPremium = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openPremiumManager() async {
+    await _loadPremiumStatus();
+    if (!mounted) {
+      return;
+    }
+    final status = _premiumStatus;
+    final isPremium = status?.isPremium == true;
+    final until = status?.premiumUntil;
+    final untilLabel = until == null
+        ? null
+        : '${until.year}.${until.month.toString().padLeft(2, '0')}.${until.day.toString().padLeft(2, '0')}';
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                '프리미엄 구독',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                isPremium ? '현재 프리미엄 이용 중입니다.' : '현재 무료 멤버입니다.',
+                style: const TextStyle(fontSize: 13),
+              ),
+              if (isPremium && untilLabel != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  '만료 예정일: $untilLabel',
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+                ),
+              ],
+              const SizedBox(height: 16),
+              if (isPremium)
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () async {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('구독 해지'),
+                          content: const Text('프리미엄 구독을 해지할까요?'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(false),
+                              child: const Text('취소'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(true),
+                              child: const Text('해지'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirm != true) {
+                        return;
+                      }
+                      await PremiumService.cancelSubscription();
+                      if (!mounted) {
+                        return;
+                      }
+                      Navigator.of(context).pop();
+                      await _loadPremiumStatus();
+                    },
+                    icon: const Icon(Icons.cancel_outlined),
+                    label: const Text('프리미엄 해지'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFFDECEC),
+                      foregroundColor: const Color(0xFFD64545),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                )
+              else
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF3A8DFF),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text('닫기', style: TextStyle(color: Colors.white)),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<String?> _resolveUserDocId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final provider = prefs.getString('lastProvider');
+    final providerId = prefs.getString('lastProviderId');
+    if ((provider == 'kakao' || provider == 'naver') &&
+        providerId != null &&
+        providerId.isNotEmpty) {
+      return '$provider:$providerId';
+    }
+    final authUser = FirebaseAuth.instance.currentUser;
+    if (authUser != null) {
+      return authUser.uid;
+    }
+    if (providerId != null && providerId.isNotEmpty) {
+      return providerId;
+    }
+    return null;
+  }
+
+  int _calculateAge(DateTime birthDate, DateTime now) {
+    var age = now.year - birthDate.year;
+    if (now.month < birthDate.month ||
+        (now.month == birthDate.month && now.day < birthDate.day)) {
+      age -= 1;
+    }
+    return age;
+  }
+
+  String? _validateNickname(String nickname) {
+    if (nickname.length < _minNicknameLength ||
+        nickname.length > _maxNicknameLength) {
+      return '닉네임은 $_minNicknameLength~$_maxNicknameLength자여야 합니다.';
+    }
+    if (!_nicknamePattern.hasMatch(nickname)) {
+      return '닉네임은 한글/영문/숫자만 사용할 수 있어요.';
+    }
+    final lowered = nickname.toLowerCase();
+    for (final word in _forbiddenNicknames) {
+      if (lowered.contains(word.toLowerCase())) {
+        return '사용할 수 없는 닉네임입니다.';
+      }
+    }
+    return null;
+  }
+
+  Future<bool> _isNicknameAvailable(String nickname) async {
+    final currentDocId = _userDocId;
+    if (currentDocId == null) {
+      return false;
+    }
+    final users = FirebaseFirestore.instance.collection('users');
+    final normalized = nickname.toLowerCase();
+    final lowerSnap =
+        await users.where('displayNameLower', isEqualTo: normalized).get();
+    for (final doc in lowerSnap.docs) {
+      if (doc.id != currentDocId) {
+        return false;
+      }
+    }
+    final exactSnap =
+        await users.where('displayName', isEqualTo: nickname).get();
+    for (final doc in exactSnap.docs) {
+      if (doc.id != currentDocId) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Future<void> _openNicknameEditor() async {
+    final controller = TextEditingController(text: _nickname ?? '');
+    bool isChecking = false;
+    bool isChecked = false;
+    String? lastChecked;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            Future<void> checkNickname() async {
+              final nickname = controller.text.trim();
+              if (nickname.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('닉네임을 입력해주세요.')),
+                );
+                return;
+              }
+              final validationMessage = _validateNickname(nickname);
+              if (validationMessage != null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(validationMessage)),
+                );
+                return;
+              }
+              setSheetState(() {
+                isChecking = true;
+              });
+              final available = await _isNicknameAvailable(nickname);
+              setSheetState(() {
+                isChecking = false;
+                isChecked = available;
+                lastChecked = available ? nickname : null;
+              });
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    available ? '사용 가능한 닉네임입니다.' : '이미 사용 중인 닉네임입니다.',
+                  ),
+                ),
+              );
+            }
+
+            Future<void> saveNickname() async {
+              final nickname = controller.text.trim();
+              if (nickname.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('닉네임을 입력해주세요.')),
+                );
+                return;
+              }
+              final validationMessage = _validateNickname(nickname);
+              if (validationMessage != null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(validationMessage)),
+                );
+                return;
+              }
+              if (!isChecked || lastChecked != nickname) {
+                await checkNickname();
+                if (!isChecked || lastChecked != nickname) {
+                  return;
+                }
+              }
+              final docId = _userDocId;
+              if (docId == null) {
+                return;
+              }
+              await FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(docId)
+                  .set({
+                'displayName': nickname,
+                'displayNameLower': nickname.toLowerCase(),
+                'updatedAt': FieldValue.serverTimestamp(),
+              }, SetOptions(merge: true));
+              if (!mounted) {
+                return;
+              }
+              setState(() {
+                _nickname = nickname;
+              });
+              Navigator.of(context).pop();
+            }
+
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 16,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE0E0E0),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    '닉네임 수정',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: controller,
+                          maxLength: _maxNicknameLength,
+                          decoration: InputDecoration(
+                            hintText: '닉네임을 입력하세요',
+                            counterText: '',
+                            filled: true,
+                            fillColor: const Color(0xFFF7F7F7),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide.none,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      SizedBox(
+                        height: 44,
+                        child: OutlinedButton(
+                          onPressed: isChecking ? null : checkNickname,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: isChecked
+                                ? const Color(0xFF2FA66A)
+                                : const Color(0xFFFF7A3D),
+                            side: BorderSide(
+                              color: isChecked
+                                  ? const Color(0xFF2FA66A)
+                                  : const Color(0xFFFF7A3D),
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                          child: isChecking
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : isChecked
+                                  ? const Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.check_circle, size: 14),
+                                        SizedBox(width: 4),
+                                        Text('확인됨'),
+                                      ],
+                                    )
+                                  : const Text('중복체크'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 46,
+                    child: ElevatedButton(
+                      onPressed: saveNickname,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFF7A3D),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      child: const Text(
+                        '저장',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _logout() async {
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('로그아웃'),
+          content: const Text('정말 로그아웃할까요?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('취소'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF7A3D),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('로그아웃'),
+            ),
+          ],
+        );
+      },
+    );
+    if (shouldLogout != true) {
+      return;
+    }
+    try {
+      await FirebaseAuth.instance.signOut();
+    } catch (_) {}
+    try {
+      await UserApi.instance.logout();
+    } catch (_) {}
+    try {
+      await FlutterNaverLogin.logOut();
+    } catch (_) {}
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('lastProvider');
+    await prefs.remove('lastProviderId');
+    if (!mounted) {
+      return;
+    }
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (context) => const LoginScreen()),
+      (route) => false,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+    final displayName = _nickname?.trim().isNotEmpty == true
+        ? _nickname!.trim()
+        : '닉네임 없음';
+    final initial =
+        displayName.isNotEmpty ? displayName.substring(0, 1) : '?';
+    final bonusYearLabel = _age == null ? '보너스 게임 정보 없음' : '보너스 게임 ${_age}년차';
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
       child: Column(
@@ -22,24 +574,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.w700,
-              color: Color(0xFFFF7A3D),
+              color: isDark ? colorScheme.primary : const Color(0xFFFF7A3D),
             ),
           ),
           const SizedBox(height: 6),
-          const Text(
+          Text(
             '앱 설정과 계정 정보를 관리하세요',
-            style: TextStyle(fontSize: 12, color: Color(0xFF9B9B9B)),
+            style: TextStyle(
+              fontSize: 12,
+              color: isDark ? colorScheme.onSurface.withOpacity(0.6) : const Color(0xFF9B9B9B),
+            ),
           ),
           const SizedBox(height: 16),
           _SettingsCard(
             child: Row(
               children: [
-                const CircleAvatar(
+                CircleAvatar(
                   radius: 22,
-                  backgroundColor: Color(0xFFFFE3D3),
+                  backgroundColor:
+                      isDark ? colorScheme.surfaceVariant : const Color(0xFFFFE3D3),
                   child: Text(
-                    '김',
-                    style: TextStyle(
+                    initial,
+                    style: const TextStyle(
                       fontWeight: FontWeight.w700,
                       color: Color(0xFFB356FF),
                     ),
@@ -49,33 +605,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
+                    children: [
                       Text(
-                        '김보너스',
+                        displayName,
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 14,
+                          color: isDark ? colorScheme.onSurface : null,
                         ),
                       ),
-                      SizedBox(height: 4),
+                      const SizedBox(height: 4),
                       Text(
-                        '보너스 게임 28년차',
-                        style: TextStyle(fontSize: 11, color: Color(0xFF8A8A8A)),
+                        bonusYearLabel,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isDark
+                              ? colorScheme.onSurface.withOpacity(0.6)
+                              : const Color(0xFF8A8A8A),
+                        ),
                       ),
-                      SizedBox(height: 2),
+                      const SizedBox(height: 2),
                       Text(
                         '무료 멤버',
-                        style: TextStyle(fontSize: 11, color: Color(0xFF8A8A8A)),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isDark
+                              ? colorScheme.onSurface.withOpacity(0.6)
+                              : const Color(0xFF8A8A8A),
+                        ),
                       ),
                     ],
                   ),
                 ),
                 OutlinedButton(
-                  onPressed: () {},
+                  onPressed: _loadingProfile ? null : _openNicknameEditor,
                   style: OutlinedButton.styleFrom(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    side: const BorderSide(color: Color(0xFFE0E0E0)),
+                    side: BorderSide(
+                      color: isDark
+                          ? colorScheme.outline.withOpacity(0.6)
+                          : const Color(0xFFE0E0E0),
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(999),
                     ),
@@ -96,16 +667,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const _SectionHeader(title: '계정'),
           _SettingsCard(
             child: Column(
-              children: const [
-                _SettingRow(
+              children: [
+                const _SettingRow(
                   icon: Icons.person_outline,
                   label: '프로필 설정',
                 ),
-                Divider(height: 1),
+                Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
                 _SettingRow(
                   icon: Icons.workspace_premium_rounded,
                   label: '프리미엄 구독',
-                  trailing: _Badge(label: '무료'),
+                  trailing: _Badge(label: _premiumStatus?.isPremium == true ? '프리미엄' : '무료'),
+                  onTap: _openPremiumManager,
                 ),
               ],
             ),
@@ -125,7 +697,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     });
                   },
                 ),
-                const Divider(height: 1),
+                Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
                 _SettingToggleRow(
                   icon: Icons.dark_mode_outlined,
                   label: '다크 모드',
@@ -134,6 +706,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     setState(() {
                       _darkMode = value;
                     });
+                    AppThemeController.setDarkMode(value);
                   },
                 ),
               ],
@@ -143,23 +716,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const _SectionHeader(title: '지원'),
           _SettingsCard(
             child: Column(
-              children: const [
-                _SettingRow(
+              children: [
+                const _SettingRow(
                   icon: Icons.help_outline_rounded,
                   label: '도움말',
                 ),
-                Divider(height: 1),
-                _SettingRow(
+                Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
+                const _SettingRow(
                   icon: Icons.privacy_tip_outlined,
                   label: '개인정보 처리방침',
                 ),
-                Divider(height: 1),
-                _SettingRow(
+                Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
+                const _SettingRow(
                   icon: Icons.description_outlined,
                   label: '서비스 이용약관',
                 ),
-                Divider(height: 1),
-                _SettingRow(
+                Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
+                const _SettingRow(
                   icon: Icons.support_agent_rounded,
                   label: '고객센터',
                 ),
@@ -168,38 +741,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 16),
           Column(
-            children: const [
+            children: [
               Text(
                 '인생은 보너스',
-                style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: isDark
+                      ? colorScheme.onSurface.withOpacity(0.6)
+                      : const Color(0xFF8A8A8A),
+                ),
               ),
               SizedBox(height: 4),
               Text(
                 '버전 1.0.0',
-                style: TextStyle(fontSize: 11, color: Color(0xFFB0B0B0)),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: isDark
+                      ? colorScheme.onSurface.withOpacity(0.5)
+                      : const Color(0xFFB0B0B0),
+                ),
               ),
               SizedBox(height: 4),
               Text(
                 '© 2024 Life Bonus. All rights reserved.',
-                style: TextStyle(fontSize: 10, color: Color(0xFFB0B0B0)),
+                style: TextStyle(
+                  fontSize: 10,
+                  color: isDark
+                      ? colorScheme.onSurface.withOpacity(0.5)
+                      : const Color(0xFFB0B0B0),
+                ),
               ),
             ],
           ),
           const SizedBox(height: 16),
           OutlinedButton.icon(
-            onPressed: () {},
+            onPressed: _logout,
             style: OutlinedButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-              side: const BorderSide(color: Color(0xFFFFD4D4)),
+              side: BorderSide(
+                color: isDark
+                    ? colorScheme.error.withOpacity(0.6)
+                    : const Color(0xFFFFD4D4),
+              ),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
               ),
             ),
-            icon: const Icon(Icons.logout, color: Color(0xFFFF6B6B)),
-            label: const Text(
+            icon: Icon(
+              Icons.logout,
+              color: isDark ? colorScheme.error : const Color(0xFFFF6B6B),
+            ),
+            label: Text(
               '로그아웃',
               style: TextStyle(
-                color: Color(0xFFFF6B6B),
+                color: isDark ? colorScheme.error : const Color(0xFFFF6B6B),
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -218,10 +813,13 @@ class _SettingsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDark ? colorScheme.surface : Colors.white,
         borderRadius: BorderRadius.circular(18),
         boxShadow: const [
           BoxShadow(
@@ -243,15 +841,20 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
     return Align(
       alignment: Alignment.centerLeft,
       child: Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Text(
           title,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 12,
-            color: Color(0xFF9B9B9B),
+            color: isDark
+                ? colorScheme.onSurface.withOpacity(0.6)
+                : const Color(0xFF9B9B9B),
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -265,24 +868,39 @@ class _SettingRow extends StatelessWidget {
     required this.icon,
     required this.label,
     this.trailing,
+    this.onTap,
   });
 
   final IconData icon;
   final String label;
   final Widget? trailing;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
-        children: [
-          _IconBubble(icon: icon),
-          const SizedBox(width: 10),
-          Text(label, style: const TextStyle(fontSize: 13)),
-          const Spacer(),
-          trailing ?? const Icon(Icons.chevron_right, color: Color(0xFFBDBDBD)),
-        ],
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            _IconBubble(icon: icon),
+            const SizedBox(width: 10),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                color: isDark ? colorScheme.onSurface : null,
+              ),
+            ),
+            const Spacer(),
+            trailing ?? const Icon(Icons.chevron_right, color: Color(0xFFBDBDBD)),
+          ],
+        ),
       ),
     );
   }
@@ -303,13 +921,22 @@ class _SettingToggleRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
         children: [
           _IconBubble(icon: icon),
           const SizedBox(width: 10),
-          Text(label, style: const TextStyle(fontSize: 13)),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              color: isDark ? colorScheme.onSurface : null,
+            ),
+          ),
           const Spacer(),
           Switch(
             value: value,
@@ -329,13 +956,20 @@ class _IconBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.all(8),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF4F4F4),
+      decoration: BoxDecoration(
+        color: isDark ? colorScheme.surfaceVariant : const Color(0xFFF4F4F4),
         shape: BoxShape.circle,
       ),
-      child: Icon(icon, size: 16, color: Color(0xFF8A8A8A)),
+      child: Icon(
+        icon,
+        size: 16,
+        color: isDark ? colorScheme.onSurface.withOpacity(0.7) : const Color(0xFF8A8A8A),
+      ),
     );
   }
 }
@@ -347,17 +981,20 @@ class _Badge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: const Color(0xFFF3E6FF),
+        color: isDark ? colorScheme.primaryContainer : const Color(0xFFF3E6FF),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 11,
-          color: Color(0xFF8E5BFF),
+          color: isDark ? colorScheme.onPrimaryContainer : const Color(0xFF8E5BFF),
           fontWeight: FontWeight.w600,
         ),
       ),

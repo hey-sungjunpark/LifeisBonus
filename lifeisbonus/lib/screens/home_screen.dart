@@ -8,6 +8,10 @@ import 'record_screen.dart';
 import 'plan_screen.dart';
 import 'message_screen.dart';
 import 'settings_screen.dart';
+import 'google_profile_screen.dart';
+import 'kakao_profile_screen.dart';
+import 'naver_profile_screen.dart';
+import 'premium_connect_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -18,6 +22,79 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
+  bool _checkedNickname = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _ensureNickname();
+    });
+  }
+
+  Future<void> _ensureNickname() async {
+    if (_checkedNickname) {
+      return;
+    }
+    _checkedNickname = true;
+    final prefs = await SharedPreferences.getInstance();
+    final provider = prefs.getString('lastProvider');
+    final providerId = prefs.getString('lastProviderId');
+
+    String? docId;
+    if ((provider == 'kakao' || provider == 'naver') &&
+        providerId != null &&
+        providerId.isNotEmpty) {
+      docId = '$provider:$providerId';
+    } else {
+      final authUser = FirebaseAuth.instance.currentUser;
+      if (authUser != null) {
+        docId = authUser.uid;
+      }
+    }
+
+    if (docId == null) {
+      return;
+    }
+
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(docId).get();
+      final displayName = doc.data()?['displayName'];
+      final hasNickname = displayName is String && displayName.trim().isNotEmpty;
+      if (hasNickname) {
+        return;
+      }
+    } catch (_) {
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    if (provider == 'kakao' && providerId != null) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => KakaoProfileScreen(kakaoId: providerId),
+        ),
+      );
+      return;
+    }
+    if (provider == 'naver' && providerId != null) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => NaverProfileScreen(naverId: providerId),
+        ),
+      );
+      return;
+    }
+
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => const GoogleProfileScreen(),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -66,6 +143,8 @@ class _HomeBodyContent extends StatefulWidget {
 
 class _HomeBodyContentState extends State<_HomeBodyContent> {
   late Future<_UserMetrics> _metricsFuture = _loadMetrics();
+  late Future<String?> _nicknameFuture = _loadNickname();
+  late Future<_MatchCounts> _matchCountsFuture = _loadMatchCounts();
   int? _targetAgeOverride;
 
   @override
@@ -78,7 +157,12 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
           child: Column(
             children: [
-              const _TodayBonusCard(),
+              FutureBuilder<String?>(
+                future: _nicknameFuture,
+                builder: (context, snapshot) {
+                  return _TodayBonusCard(nickname: snapshot.data);
+                },
+              ),
               const SizedBox(height: 16),
               _RemainingBonusCard(
                 metrics: metrics,
@@ -87,7 +171,13 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
               const SizedBox(height: 16),
               _LifeJourneyCard(metrics: metrics),
               const SizedBox(height: 16),
-              const _PeopleCard(),
+              FutureBuilder<_MatchCounts>(
+                future: _matchCountsFuture,
+                builder: (context, snapshot) {
+                  final counts = snapshot.data ?? const _MatchCounts();
+                  return _PeopleCard(counts: counts);
+                },
+              ),
               const SizedBox(height: 90),
             ],
           ),
@@ -122,18 +212,46 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
   }
 
   Future<DateTime?> _loadBirthDate() async {
-    final authUser = FirebaseAuth.instance.currentUser;
-    if (authUser != null) {
-      return _fetchBirthDate('users', authUser.uid);
+    final docId = await _resolveUserDocId();
+    if (docId == null) {
+      return null;
     }
+    return _fetchBirthDate('users', docId);
+  }
 
+  Future<String?> _loadNickname() async {
+    final docId = await _resolveUserDocId();
+    if (docId == null) {
+      return null;
+    }
+    try {
+      final doc =
+          await FirebaseFirestore.instance.collection('users').doc(docId).get();
+      final displayName = doc.data()?['displayName'];
+      if (displayName is String && displayName.trim().isNotEmpty) {
+        return displayName.trim();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<String?> _resolveUserDocId() async {
     final prefs = await SharedPreferences.getInstance();
     final provider = prefs.getString('lastProvider');
     final providerId = prefs.getString('lastProviderId');
-    if (provider == null || providerId == null) {
-      return null;
+    if ((provider == 'kakao' || provider == 'naver') &&
+        providerId != null &&
+        providerId.isNotEmpty) {
+      return '$provider:$providerId';
     }
-    return _fetchBirthDate('users', '$provider:$providerId');
+    final authUser = FirebaseAuth.instance.currentUser;
+    if (authUser != null) {
+      return authUser.uid;
+    }
+    if (providerId != null && providerId.isNotEmpty) {
+      return providerId;
+    }
+    return null;
   }
 
   Future<DateTime?> _fetchBirthDate(String collection, String docId) async {
@@ -185,10 +303,291 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
     }
     return _loadMetrics();
   }
+
+  Future<_MatchCounts> _loadMatchCounts() async {
+    final userDocId = await _resolveUserDocId();
+    if (userDocId == null) {
+      return const _MatchCounts();
+    }
+    final counts = <String, int>{};
+    final uniqueUsers = <String>{};
+
+    Future<void> applyCount(
+      QuerySnapshot<Map<String, dynamic>> snapshot,
+      String key,
+    ) async {
+      final users = snapshot.docs.map((doc) {
+        final ownerId = doc.data()['ownerId'] as String?;
+        final parentId = doc.reference.parent.parent?.id;
+        return ownerId ?? parentId;
+      }).whereType<String>().where((id) => id != userDocId).toSet();
+      counts[key] = users.length;
+      uniqueUsers.addAll(users);
+    }
+
+    final schoolSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(userDocId)
+        .collection('schools')
+        .orderBy('updatedAt', descending: true)
+        .get();
+    if (schoolSnapshot.docs.isNotEmpty) {
+      final matchKeyMap = <String, Set<String>>{};
+      for (final doc in schoolSnapshot.docs) {
+        final data = doc.data();
+        final storedSchoolKey = data['schoolKey']?.toString();
+        final schoolKey = storedSchoolKey ?? _buildSchoolKeyFromData(data);
+        final storedKeys = data['matchKeys'] is List
+            ? (data['matchKeys'] as List).map((key) => key.toString()).toList()
+            : <String>[];
+        final computedKeys = storedKeys.isNotEmpty
+            ? storedKeys
+            : _buildMatchKeysFromData(data, schoolKey);
+        if (schoolKey.isEmpty || computedKeys.isEmpty) {
+          continue;
+        }
+        final existingKeys = data['matchKeys'];
+        final existingSet = existingKeys is List
+            ? existingKeys.map((key) => key.toString()).toSet()
+            : <String>{};
+        final computedSet = computedKeys.toSet();
+        final needsUpdate =
+            (data['schoolKey'] != schoolKey) ||
+            (computedSet.isNotEmpty &&
+                (existingSet.isEmpty ||
+                    existingSet.length != computedSet.length ||
+                    !existingSet.containsAll(computedSet)));
+        if (needsUpdate || data['ownerId'] == null) {
+          await doc.reference.set({
+            'schoolKey': schoolKey,
+            'matchKeys': computedKeys,
+            'ownerId': userDocId,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+        matchKeyMap.putIfAbsent(schoolKey, () => <String>{});
+        matchKeyMap[schoolKey]!.addAll(computedKeys);
+      }
+      if (matchKeyMap.isNotEmpty) {
+        final matchedUsers = <String>{};
+        final allKeys = matchKeyMap.values
+            .expand((keys) => keys)
+            .where((key) => key.isNotEmpty)
+            .toSet()
+            .toList();
+        for (var i = 0; i < allKeys.length; i += 10) {
+          final batch = allKeys.sublist(
+            i,
+            i + 10 > allKeys.length ? allKeys.length : i + 10,
+          );
+          final snap = await FirebaseFirestore.instance
+              .collectionGroup('schools')
+              .where('matchKeys', arrayContainsAny: batch)
+              .get();
+          for (final doc in snap.docs) {
+            final data = doc.data();
+            final ownerId = data['ownerId'] as String?;
+            final parentId = doc.reference.parent.parent?.id;
+            final resolvedId = ownerId ?? parentId;
+            if (resolvedId == null || resolvedId == userDocId) {
+              continue;
+            }
+            matchedUsers.add(resolvedId);
+          }
+        }
+        counts['school'] = matchedUsers.length;
+        uniqueUsers.addAll(matchedUsers);
+      }
+    }
+
+    final latestNeighborhood = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(userDocId)
+        .collection('neighborhoods')
+        .orderBy('startYear', descending: true)
+        .limit(1)
+        .get();
+    if (latestNeighborhood.docs.isNotEmpty) {
+      final data = latestNeighborhood.docs.first.data();
+      final matchKey = data['matchKey'] as String?;
+      if (matchKey != null && matchKey.isNotEmpty) {
+        final snap = await FirebaseFirestore.instance
+            .collectionGroup('neighborhoods')
+            .where('matchKey', isEqualTo: matchKey)
+            .get();
+        await applyCount(snap, 'neighborhood');
+      }
+    }
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final upcomingPlan = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(userDocId)
+        .collection('plans')
+        .where('endDate', isGreaterThanOrEqualTo: today)
+        .orderBy('endDate')
+        .limit(1)
+        .get();
+    if (upcomingPlan.docs.isNotEmpty) {
+      final data = upcomingPlan.docs.first.data();
+      final matchKey = data['matchKey'] as String?;
+      if (matchKey != null && matchKey.isNotEmpty) {
+        final snap = await FirebaseFirestore.instance
+            .collectionGroup('plans')
+            .where('matchKey', isEqualTo: matchKey)
+            .get();
+        await applyCount(snap, 'plan');
+      }
+    }
+
+    final latestMemory = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(userDocId)
+        .collection('memories')
+        .orderBy('date', descending: true)
+        .limit(1)
+        .get();
+    if (latestMemory.docs.isNotEmpty) {
+      final data = latestMemory.docs.first.data();
+      final matchKeys = data['matchKeys'] as List<dynamic>?;
+      if (matchKeys != null && matchKeys.isNotEmpty) {
+        final matchKey = matchKeys.first.toString();
+        final snap = await FirebaseFirestore.instance
+            .collectionGroup('memories')
+            .where('matchKeys', arrayContains: matchKey)
+            .get();
+        await applyCount(snap, 'memory');
+      }
+    }
+
+    return _MatchCounts(
+      total: uniqueUsers.length,
+      sameMemory: counts['memory'] ?? 0,
+      sameSchool: counts['school'] ?? 0,
+      sameNeighborhood: counts['neighborhood'] ?? 0,
+      similarPlan: counts['plan'] ?? 0,
+    );
+  }
+
+  String _normalizeMatchValue(String value) {
+    return value.trim().toLowerCase().replaceAll(' ', '').replaceAll('-', '');
+  }
+
+  String _normalizeProvince(String value) {
+    var normalized = _normalizeMatchValue(value);
+    if (normalized.isEmpty) {
+      return normalized;
+    }
+    const suffixes = [
+      '특별자치시',
+      '특별자치도',
+      '광역시',
+      '특별시',
+      '자치시',
+      '자치도',
+      '도',
+      '시',
+    ];
+    for (final suffix in suffixes) {
+      if (normalized.endsWith(suffix)) {
+        normalized = normalized.substring(0, normalized.length - suffix.length);
+        break;
+      }
+    }
+    return normalized;
+  }
+
+  String _normalizeDistrict(String value) {
+    var normalized = _normalizeMatchValue(value);
+    if (normalized.isEmpty) {
+      return normalized;
+    }
+    const suffixes = ['특별자치구', '자치구', '구', '군', '시'];
+    for (final suffix in suffixes) {
+      if (normalized.endsWith(suffix)) {
+        normalized = normalized.substring(0, normalized.length - suffix.length);
+        break;
+      }
+    }
+    return normalized;
+  }
+
+  String _normalizeDong(String value) {
+    var normalized = _normalizeMatchValue(value);
+    if (normalized.isEmpty) {
+      return normalized;
+    }
+    const suffixes = ['읍', '면', '동', '리'];
+    for (final suffix in suffixes) {
+      if (normalized.endsWith(suffix)) {
+        normalized = normalized.substring(0, normalized.length - suffix.length);
+        break;
+      }
+    }
+    return normalized;
+  }
+
+  int? _parseFlexibleInt(dynamic value) {
+    if (value == null) {
+      return null;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    final text = value.toString().trim().toLowerCase();
+    if (text.isEmpty || text == '모름' || text == 'unknown') {
+      return null;
+    }
+    final digits = text.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.isEmpty) {
+      return null;
+    }
+    return int.tryParse(digits);
+  }
+
+  String _buildSchoolKeyFromData(Map<String, dynamic> data) {
+    final level = data['level']?.toString() ?? '';
+    final name = _normalizeMatchValue(data['name']?.toString() ?? '');
+    final province = _normalizeProvince(data['province']?.toString() ?? '');
+    final district = _normalizeDistrict(data['district']?.toString() ?? '');
+    final dong = _normalizeDong(data['dong']?.toString() ?? '');
+    return [level, name, province, district, dong].join('|');
+  }
+
+  List<String> _buildMatchKeysFromData(
+    Map<String, dynamic> data,
+    String schoolKey,
+  ) {
+    final keys = <String>[];
+    final gradeEntries = data['gradeEntries'];
+    if (gradeEntries is List) {
+      for (final entry in gradeEntries) {
+        if (entry is Map) {
+          final year = _parseFlexibleInt(entry['year']);
+          final grade = _parseFlexibleInt(entry['grade']);
+          final classNumber = _parseFlexibleInt(entry['classNumber']);
+          if (year != null && grade != null && classNumber != null) {
+            keys.add('$schoolKey|$year|$grade|$classNumber');
+          }
+        }
+      }
+    } else {
+      final year = _parseFlexibleInt(data['year']);
+      final grade = _parseFlexibleInt(data['grade']);
+      final classNumber = _parseFlexibleInt(data['classNumber']);
+      if (year != null && grade != null && classNumber != null) {
+        keys.add('$schoolKey|$year|$grade|$classNumber');
+      }
+    }
+    return keys;
+  }
 }
 
 class _TodayBonusCard extends StatelessWidget {
-  const _TodayBonusCard();
+  const _TodayBonusCard({this.nickname});
+
+  final String? nickname;
 
   @override
   Widget build(BuildContext context) {
@@ -220,21 +619,45 @@ class _TodayBonusCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            children: const [
-              Icon(
+            children: [
+              const Icon(
                 Icons.card_giftcard_rounded,
                 color: Colors.white,
                 size: 20,
               ),
-              SizedBox(width: 6),
-              Text(
-                '오늘의 보너스 게임',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
+              const SizedBox(width: 6),
+              if (nickname != null && nickname!.trim().isNotEmpty)
+                RichText(
+                  text: TextSpan(
+                    children: [
+                      TextSpan(
+                        text: nickname!.trim(),
+                        style: const TextStyle(
+                          color: Color(0xFFFFC940),
+                          fontWeight: FontWeight.w800,
+                          fontSize: 18,
+                        ),
+                      ),
+                      const TextSpan(
+                        text: '님의 보너스 게임',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                const Text(
+                  '오늘의 보너스 게임',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                  ),
                 ),
-              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -544,7 +967,9 @@ class _LifeJourneyCard extends StatelessWidget {
 }
 
 class _PeopleCard extends StatelessWidget {
-  const _PeopleCard();
+  const _PeopleCard({required this.counts});
+
+  final _MatchCounts counts;
 
   @override
   Widget build(BuildContext context) {
@@ -557,9 +982,9 @@ class _PeopleCard extends StatelessWidget {
       child: Column(
         children: [
           const SizedBox(height: 6),
-          const Text(
-            '127명',
-            style: TextStyle(
+          Text(
+            '${counts.total}명',
+            style: const TextStyle(
               fontSize: 22,
               color: Color(0xFFB356FF),
               fontWeight: FontWeight.w700,
@@ -579,12 +1004,21 @@ class _PeopleCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(14),
             ),
             child: Column(
-              children: const [
-                _PeopleRow(label: '같은 학교 출신', value: '23명'),
-                SizedBox(height: 8),
-                _PeopleRow(label: '같은 동네 거주', value: '15명'),
-                SizedBox(height: 8),
-                _PeopleRow(label: '비슷한 목표', value: '89명'),
+              children: [
+                _PeopleRow(
+                  label: '같은 학교 출신',
+                  value: '${counts.sameSchool}명',
+                ),
+                const SizedBox(height: 8),
+                _PeopleRow(
+                  label: '같은 동네 거주',
+                  value: '${counts.sameNeighborhood}명',
+                ),
+                const SizedBox(height: 8),
+                _PeopleRow(
+                  label: '비슷한 목표',
+                  value: '${counts.similarPlan}명',
+                ),
               ],
             ),
           ),
@@ -592,20 +1026,30 @@ class _PeopleCard extends StatelessWidget {
           SizedBox(
             height: 44,
             width: double.infinity,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                gradient: LinearGradient(
-                  colors: [Color(0xFFB356FF), Color(0xFFFF4FA6)],
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const PremiumConnectScreen(),
+                  ),
+                );
+              },
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  gradient: LinearGradient(
+                    colors: [Color(0xFFB356FF), Color(0xFFFF4FA6)],
+                  ),
                 ),
-              ),
-              child: Center(
-                child: Text(
-                  '프리미엄으로 연결하기',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13,
+                child: Center(
+                  child: Text(
+                    '프리미엄으로 연결하기',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               ),
@@ -1167,6 +1611,22 @@ class _PeopleRow extends StatelessWidget {
       ],
     );
   }
+}
+
+class _MatchCounts {
+  const _MatchCounts({
+    this.total = 0,
+    this.sameMemory = 0,
+    this.sameSchool = 0,
+    this.sameNeighborhood = 0,
+    this.similarPlan = 0,
+  });
+
+  final int total;
+  final int sameMemory;
+  final int sameSchool;
+  final int sameNeighborhood;
+  final int similarPlan;
 }
 
 class _HomeBottomNav extends StatelessWidget {

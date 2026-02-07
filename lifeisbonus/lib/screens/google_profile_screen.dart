@@ -14,7 +14,85 @@ class GoogleProfileScreen extends StatefulWidget {
 
 class _GoogleProfileScreenState extends State<GoogleProfileScreen> {
   DateTime? _birthDate;
+  bool _birthDateLocked = false;
   bool _isSaving = false;
+  bool _isCheckingNickname = false;
+  bool _isNicknameChecked = false;
+  String? _lastCheckedNickname;
+  final TextEditingController _nicknameController = TextEditingController();
+
+  static final RegExp _nicknamePattern =
+      RegExp(r'^[a-zA-Z0-9가-힣]+$');
+  static const int _minNicknameLength = 2;
+  static const int _maxNicknameLength = 12;
+  static const List<String> _forbiddenNicknames = [
+    'admin',
+    'administrator',
+    'root',
+    'system',
+    'support',
+    'operator',
+    'test',
+    '운영자',
+    '관리자',
+    '시스템',
+    '테스트',
+    '고객센터',
+    '바보',
+    '병신',
+    '개새끼',
+    '새끼',
+    '섹스',
+    '섹',
+    '욕',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    final user = FirebaseAuth.instance.currentUser;
+    _nicknameController.text = user?.displayName?.trim() ?? '';
+    _nicknameController.addListener(_onNicknameChanged);
+    _loadExistingProfile();
+  }
+
+  @override
+  void dispose() {
+    _nicknameController.removeListener(_onNicknameChanged);
+    _nicknameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadExistingProfile() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        return;
+      }
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      final data = doc.data();
+      if (data == null) {
+        return;
+      }
+      final displayName = data['displayName'] as String?;
+      final birthDateValue = data['birthDate'] as String?;
+      if (displayName != null && displayName.trim().isNotEmpty) {
+        _nicknameController.text = displayName.trim();
+      }
+      if (birthDateValue != null) {
+        final parsed = DateTime.tryParse(birthDateValue);
+        if (parsed != null) {
+          setState(() {
+            _birthDate = parsed;
+            _birthDateLocked = true;
+          });
+        }
+      }
+    } catch (_) {}
+  }
 
   Future<void> _pickBirthDate() async {
     final now = DateTime.now();
@@ -202,6 +280,20 @@ class _GoogleProfileScreenState extends State<GoogleProfileScreen> {
     if (user == null) {
       return;
     }
+    final resolvedNickname = _resolveNickname(user.displayName);
+    if (resolvedNickname == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('닉네임을 입력해주세요.')),
+      );
+      return;
+    }
+    final validationMessage = _validateNickname(resolvedNickname);
+    if (validationMessage != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(validationMessage)),
+      );
+      return;
+    }
     if (_birthDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('생년월일을 선택해주세요.')),
@@ -214,11 +306,29 @@ class _GoogleProfileScreenState extends State<GoogleProfileScreen> {
     });
 
     try {
+      if (!_isNicknameChecked || _lastCheckedNickname != resolvedNickname) {
+        final isAvailable = await _isNicknameAvailable(
+          resolvedNickname,
+          user.uid,
+        );
+        if (!isAvailable) {
+          if (!mounted) {
+            return;
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('이미 사용 중인 닉네임입니다.')),
+          );
+          return;
+        }
+        _isNicknameChecked = true;
+        _lastCheckedNickname = resolvedNickname;
+      }
       final users = FirebaseFirestore.instance.collection('users');
       await users.doc(user.uid).set(
         {
           'email': user.email,
-          'displayName': user.displayName,
+          'displayName': resolvedNickname,
+          'displayNameLower': resolvedNickname.toLowerCase(),
           'birthDate': _birthDate!.toIso8601String(),
           'method': 'google',
           'updatedAt': FieldValue.serverTimestamp(),
@@ -246,6 +356,105 @@ class _GoogleProfileScreenState extends State<GoogleProfileScreen> {
         });
       }
     }
+  }
+
+  void _onNicknameChanged() {
+    final current = _nicknameController.text.trim();
+    if (_lastCheckedNickname == null || current != _lastCheckedNickname) {
+      _isNicknameChecked = false;
+    }
+  }
+
+  Future<void> _checkNicknameAvailability() async {
+    final nickname = _nicknameController.text.trim();
+    if (nickname.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('닉네임을 입력해주세요.')),
+      );
+      return;
+    }
+    final validationMessage = _validateNickname(nickname);
+    if (validationMessage != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(validationMessage)),
+      );
+      return;
+    }
+    setState(() {
+      _isCheckingNickname = true;
+    });
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return;
+    }
+    final available = await _isNicknameAvailable(nickname, user.uid);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isCheckingNickname = false;
+      _isNicknameChecked = available;
+      _lastCheckedNickname = available ? nickname : null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          available ? '사용 가능한 닉네임입니다.' : '이미 사용 중인 닉네임입니다.',
+        ),
+      ),
+    );
+  }
+
+  String? _resolveNickname(String? fallback) {
+    final input = _nicknameController.text.trim();
+    if (input.isNotEmpty) {
+      return input;
+    }
+    final trimmed = fallback?.trim();
+    if (trimmed != null && trimmed.isNotEmpty) {
+      return trimmed;
+    }
+    return null;
+  }
+
+  String? _validateNickname(String nickname) {
+    if (nickname.length < _minNicknameLength ||
+        nickname.length > _maxNicknameLength) {
+      return '닉네임은 $_minNicknameLength~$_maxNicknameLength자여야 합니다.';
+    }
+    if (!_nicknamePattern.hasMatch(nickname)) {
+      return '닉네임은 한글/영문/숫자만 사용할 수 있어요.';
+    }
+    final lowered = nickname.toLowerCase();
+    for (final word in _forbiddenNicknames) {
+      if (lowered.contains(word.toLowerCase())) {
+        return '사용할 수 없는 닉네임입니다.';
+      }
+    }
+    return null;
+  }
+
+  Future<bool> _isNicknameAvailable(
+    String nickname,
+    String currentDocId,
+  ) async {
+    final users = FirebaseFirestore.instance.collection('users');
+    final normalized = nickname.toLowerCase();
+    final lowerSnap =
+        await users.where('displayNameLower', isEqualTo: normalized).get();
+    for (final doc in lowerSnap.docs) {
+      if (doc.id != currentDocId) {
+        return false;
+      }
+    }
+    final exactSnap =
+        await users.where('displayName', isEqualTo: nickname).get();
+    for (final doc in exactSnap.docs) {
+      if (doc.id != currentDocId) {
+        return false;
+      }
+    }
+    return true;
   }
 
   @override
@@ -277,9 +486,11 @@ class _GoogleProfileScreenState extends State<GoogleProfileScreen> {
                   ),
                 ),
                 const SizedBox(height: 6),
-                const Text(
-                  '구글 로그인 후 생년월일을 입력해주세요.',
-                  style: TextStyle(
+                Text(
+                  _birthDateLocked
+                      ? '닉네임만 입력해주세요.'
+                      : '구글 로그인 후 생년월일을 입력해주세요.',
+                  style: const TextStyle(
                     fontSize: 12,
                     color: Color(0xFF9B9B9B),
                   ),
@@ -303,6 +514,82 @@ class _GoogleProfileScreenState extends State<GoogleProfileScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
+                        '닉네임',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF6F6F6F),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _nicknameController,
+                              maxLength: _maxNicknameLength,
+                              decoration: InputDecoration(
+                                hintText: '닉네임을 입력하세요',
+                                counterText: '',
+                                filled: true,
+                                fillColor: const Color(0xFFF7F7F7),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: BorderSide.none,
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFFFF7A3D),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          SizedBox(
+                            height: 40,
+                            child: OutlinedButton(
+                              onPressed: _isCheckingNickname
+                                  ? null
+                                  : _checkNicknameAvailability,
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _isNicknameChecked
+                                    ? const Color(0xFF2FA66A)
+                                    : const Color(0xFFFF7A3D),
+                                side: BorderSide(
+                                  color: _isNicknameChecked
+                                      ? const Color(0xFF2FA66A)
+                                      : const Color(0xFFFF7A3D),
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              child: _isCheckingNickname
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : _isNicknameChecked
+                                      ? const Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.check_circle, size: 14),
+                                            SizedBox(width: 4),
+                                            Text('확인됨'),
+                                          ],
+                                        )
+                                      : const Text('중복체크'),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
                         '생년월일',
                         style: TextStyle(
                           fontSize: 12,
@@ -312,14 +599,16 @@ class _GoogleProfileScreenState extends State<GoogleProfileScreen> {
                       ),
                       const SizedBox(height: 6),
                       GestureDetector(
-                        onTap: _pickBirthDate,
+                        onTap: _birthDateLocked ? null : _pickBirthDate,
                         child: Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 14,
                             vertical: 12,
                           ),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF7F7F7),
+                            color: _birthDateLocked
+                                ? const Color(0xFFEFEFEF)
+                                : const Color(0xFFF7F7F7),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Row(

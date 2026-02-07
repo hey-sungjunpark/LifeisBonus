@@ -77,6 +77,10 @@ class _LoginScreenState extends State<LoginScreen> {
         email: email,
         password: password,
       );
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        await _storeLastProvider('firebase', user.uid);
+      }
       if (!mounted) {
         return;
       }
@@ -270,6 +274,10 @@ class _LoginScreenState extends State<LoginScreen> {
       _showError('전화번호 인증을 완료해주세요.');
       return;
     }
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      await _storeLastProvider('firebase', user.uid);
+    }
     if (!mounted) {
       return;
     }
@@ -310,6 +318,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (user == null || !mounted) {
         return;
       }
+      await _storeLastProvider('google', user.uid);
 
       final doc = await FirebaseFirestore.instance
           .collection('users')
@@ -317,12 +326,15 @@ class _LoginScreenState extends State<LoginScreen> {
           .get();
       final data = doc.data();
       final hasBirthDate = data != null && data['birthDate'] != null;
+      final hasNickname = data != null &&
+          data['displayName'] is String &&
+          (data['displayName'] as String).trim().isNotEmpty;
 
       if (!mounted) {
         return;
       }
 
-      if (hasBirthDate) {
+      if (hasBirthDate && hasNickname) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('로그인에 성공했습니다.')),
         );
@@ -361,6 +373,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
     try {
+      await _clearAuthSessions();
       final OAuthToken token;
       final isInstalled = await isKakaoTalkInstalled();
       if (isInstalled) {
@@ -395,12 +408,15 @@ class _LoginScreenState extends State<LoginScreen> {
           .get();
       final data = doc.data();
       final hasBirthDate = data != null && data['birthDate'] != null;
+      final hasNickname = data != null &&
+          data['displayName'] is String &&
+          (data['displayName'] as String).trim().isNotEmpty;
 
       if (!mounted) {
         return;
       }
 
-      if (hasBirthDate) {
+      if (hasBirthDate && hasNickname) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -454,6 +470,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
     try {
+      await _clearAuthSessions();
       final result = await FlutterNaverLogin.logIn();
       if (result.status != NaverLoginStatus.loggedIn) {
         _showError('네이버 로그인에 실패했습니다.');
@@ -475,12 +492,15 @@ class _LoginScreenState extends State<LoginScreen> {
           .get();
       final data = doc.data();
       final hasBirthDate = data != null && data['birthDate'] != null;
+      final hasNickname = data != null &&
+          data['displayName'] is String &&
+          (data['displayName'] as String).trim().isNotEmpty;
 
       if (!mounted) {
         return;
       }
 
-      if (hasBirthDate) {
+      if (hasBirthDate && hasNickname) {
         final nickname = account?.nickname;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -538,6 +558,19 @@ class _LoginScreenState extends State<LoginScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
+  }
+
+  Future<void> _clearAuthSessions() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      await FirebaseAuth.instance.signOut();
+    }
+    try {
+      await UserApi.instance.logout();
+    } catch (_) {}
+    try {
+      await FlutterNaverLogin.logOut();
+    } catch (_) {}
   }
 
   Future<void> _storeLastProvider(String provider, String id) async {
@@ -609,17 +642,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   onNaverPressed: _handleNaverLogin,
                 ),
                 const SizedBox(height: 24),
-                TextButton(
-                  onPressed: () {},
-                  child: const Text(
-                    '나중에 하기',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Color(0xFF8A8A8A),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 10),
                 const _LegalText(),
                 const SizedBox(height: 24),
               ],
@@ -1041,6 +1063,34 @@ class _PhoneLoginCard extends StatelessWidget {
           _LoginButton(
             onPressed: phoneVerified ? onLoginPressed : null,
             isLoading: false,
+          ),
+          const SizedBox(height: 14),
+          GestureDetector(
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const SignUpScreen(),
+                ),
+              );
+            },
+            child: Text.rich(
+              TextSpan(
+                text: '계정이 없으신가요? ',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF8A8A8A),
+                ),
+                children: [
+                  TextSpan(
+                    text: '회원가입',
+                    style: const TextStyle(
+                      color: Color(0xFFFF4FA6),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
