@@ -98,6 +98,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final screens = [
       const _HomeBody(),
       const RecordScreen(),
@@ -106,7 +108,8 @@ class _HomeScreenState extends State<HomeScreen> {
       const SettingsScreen(),
     ];
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F3FB),
+      backgroundColor:
+          isDark ? theme.scaffoldBackgroundColor : const Color(0xFFF7F3FB),
       body: SafeArea(
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 250),
@@ -144,8 +147,65 @@ class _HomeBodyContent extends StatefulWidget {
 class _HomeBodyContentState extends State<_HomeBodyContent> {
   late Future<_UserMetrics> _metricsFuture = _loadMetrics();
   late Future<String?> _nicknameFuture = _loadNickname();
-  late Future<_MatchCounts> _matchCountsFuture = _loadMatchCounts();
+  final ValueNotifier<_MatchCounts> _matchCountsNotifier =
+      ValueNotifier(const _MatchCounts());
+  Future<_MatchCounts>? _matchCountsInFlight;
+  _MatchCounts? _lastMatchCounts;
+  DateTime? _lastMatchCountsAt;
   int? _targetAgeOverride;
+  String? _lastUserDocId;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _refreshIfUserChanged();
+  }
+
+  @override
+  void dispose() {
+    _matchCountsNotifier.dispose();
+    super.dispose();
+  }
+
+  Future<void> _refreshIfUserChanged() async {
+    final docId = await _resolveUserDocId();
+    if (!mounted) {
+      return;
+    }
+    if (docId != _lastUserDocId) {
+      setState(() {
+        _lastUserDocId = docId;
+        _metricsFuture = _loadMetrics();
+        _nicknameFuture = _loadNickname();
+      });
+      await _refreshMatchCounts(force: true);
+    }
+  }
+
+  Future<void> _refreshMatchCounts({bool force = false}) async {
+    final now = DateTime.now();
+    final lastAt = _lastMatchCountsAt;
+    final cached = _lastMatchCounts;
+    if (!force &&
+        cached != null &&
+        lastAt != null &&
+        now.difference(lastAt).inSeconds < 30) {
+      _matchCountsNotifier.value = cached;
+      return;
+    }
+    final inFlight = _matchCountsInFlight;
+    if (inFlight != null) {
+      final result = await inFlight;
+      _matchCountsNotifier.value = result;
+      return;
+    }
+    final future = _loadMatchCountsInternal().whenComplete(() {
+      _matchCountsInFlight = null;
+    });
+    _matchCountsInFlight = future;
+    final result = await future;
+    _matchCountsNotifier.value = result;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -153,8 +213,9 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
       future: _metricsFuture,
       builder: (context, snapshot) {
         final metrics = snapshot.data ?? _UserMetrics.empty;
+        final bottomInset = MediaQuery.of(context).padding.bottom;
         return SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+          padding: EdgeInsets.fromLTRB(20, 18, 20, 24 + bottomInset),
           child: Column(
             children: [
               FutureBuilder<String?>(
@@ -171,14 +232,12 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
               const SizedBox(height: 16),
               _LifeJourneyCard(metrics: metrics),
               const SizedBox(height: 16),
-              FutureBuilder<_MatchCounts>(
-                future: _matchCountsFuture,
-                builder: (context, snapshot) {
-                  final counts = snapshot.data ?? const _MatchCounts();
+              ValueListenableBuilder<_MatchCounts>(
+                valueListenable: _matchCountsNotifier,
+                builder: (context, counts, _) {
                   return _PeopleCard(counts: counts);
                 },
               ),
-              const SizedBox(height: 90),
             ],
           ),
         );
@@ -205,6 +264,8 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
     return _UserMetrics(
       age: age,
       targetAge: targetAge,
+      birthYear: birthDate.year,
+      targetYear: birthDate.year + targetAge,
       livedDays: livedDays,
       remainingDays: remainingDays,
       progress: progress?.clamp(0.0, 1.0),
@@ -304,10 +365,13 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
     return _loadMetrics();
   }
 
-  Future<_MatchCounts> _loadMatchCounts() async {
+  Future<_MatchCounts> _loadMatchCountsInternal() async {
     final userDocId = await _resolveUserDocId();
     if (userDocId == null) {
-      return const _MatchCounts();
+      const empty = _MatchCounts();
+      _lastMatchCounts = empty;
+      _lastMatchCountsAt = DateTime.now();
+      return empty;
     }
     final counts = <String, int>{};
     final uniqueUsers = <String>{};
@@ -369,7 +433,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
         matchKeyMap[schoolKey]!.addAll(computedKeys);
       }
       if (matchKeyMap.isNotEmpty) {
-        final matchedUsers = <String>{};
+        var matchCount = 0;
         final allKeys = matchKeyMap.values
             .expand((keys) => keys)
             .where((key) => key.isNotEmpty)
@@ -392,82 +456,161 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
             if (resolvedId == null || resolvedId == userDocId) {
               continue;
             }
-            matchedUsers.add(resolvedId);
+            final docKeys = data['matchKeys'];
+            if (docKeys is List) {
+              matchCount += docKeys
+                  .map((key) => key.toString())
+                  .where(batch.contains)
+                  .length;
+            }
           }
         }
-        counts['school'] = matchedUsers.length;
-        uniqueUsers.addAll(matchedUsers);
+        counts['school'] = matchCount;
       }
     }
 
-    final latestNeighborhood = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(userDocId)
-        .collection('neighborhoods')
-        .orderBy('startYear', descending: true)
-        .limit(1)
-        .get();
-    if (latestNeighborhood.docs.isNotEmpty) {
-      final data = latestNeighborhood.docs.first.data();
-      final matchKey = data['matchKey'] as String?;
-      if (matchKey != null && matchKey.isNotEmpty) {
-        final snap = await FirebaseFirestore.instance
-            .collectionGroup('neighborhoods')
-            .where('matchKey', isEqualTo: matchKey)
-            .get();
-        await applyCount(snap, 'neighborhood');
+    try {
+      final userNeighborhoods = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userDocId)
+          .collection('neighborhoods')
+          .get();
+      if (userNeighborhoods.docs.isNotEmpty) {
+        final recordsByKey = <String, List<Map<String, int>>>{};
+        for (final doc in userNeighborhoods.docs) {
+          final data = doc.data();
+          final province = data['province']?.toString() ?? '';
+          final district = data['district']?.toString() ?? '';
+          final dong = data['dong']?.toString() ?? '';
+          final startYear = _parseFlexibleInt(data['startYear']);
+          final endYear = _parseFlexibleInt(data['endYear']);
+          if (startYear == null || endYear == null) {
+            continue;
+          }
+          var matchKey = data['matchKey'] as String?;
+          if (matchKey == null || matchKey.trim().isEmpty) {
+            matchKey = _buildNeighborhoodMatchKeyFromFields(
+              province,
+              district,
+              dong,
+            );
+          }
+          if (matchKey == null || matchKey.isEmpty) {
+            continue;
+          }
+          recordsByKey.putIfAbsent(matchKey, () => <Map<String, int>>[]);
+          recordsByKey[matchKey]!.add({
+            'start': startYear,
+            'end': endYear,
+          });
+        }
+        if (recordsByKey.isNotEmpty) {
+          var matchCount = 0;
+          for (final entry in recordsByKey.entries) {
+            final matchKey = entry.key;
+            final ranges = entry.value;
+            final snap = await FirebaseFirestore.instance
+                .collectionGroup('neighborhoods')
+                .where('matchKey', isEqualTo: matchKey)
+                .get();
+            for (final doc in snap.docs) {
+              final data = doc.data();
+              final ownerId = data['ownerId'] as String?;
+              final parentId = doc.reference.parent.parent?.id;
+              final resolvedId = ownerId ?? parentId;
+              if (resolvedId == null || resolvedId == userDocId) {
+                continue;
+              }
+              final startYear = _parseFlexibleInt(data['startYear']);
+              final endYear = _parseFlexibleInt(data['endYear']);
+              if (startYear == null || endYear == null) {
+                continue;
+              }
+              var overlaps = false;
+              for (final range in ranges) {
+                final rangeStart = range['start']!;
+                final rangeEnd = range['end']!;
+                if (_rangesOverlap(
+                  rangeStart,
+                  rangeEnd,
+                  startYear,
+                  endYear,
+                )) {
+                  overlaps = true;
+                  break;
+                }
+              }
+              if (overlaps) {
+                matchCount += 1;
+              }
+            }
+          }
+          counts['neighborhood'] = matchCount;
+        }
       }
+    } catch (e) {
+      debugPrint('[match-count] neighborhood error: $e');
     }
 
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final upcomingPlan = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(userDocId)
-        .collection('plans')
-        .where('endDate', isGreaterThanOrEqualTo: today)
-        .orderBy('endDate')
-        .limit(1)
-        .get();
-    if (upcomingPlan.docs.isNotEmpty) {
-      final data = upcomingPlan.docs.first.data();
-      final matchKey = data['matchKey'] as String?;
-      if (matchKey != null && matchKey.isNotEmpty) {
-        final snap = await FirebaseFirestore.instance
-            .collectionGroup('plans')
-            .where('matchKey', isEqualTo: matchKey)
-            .get();
-        await applyCount(snap, 'plan');
+    try {
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final upcomingPlan = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userDocId)
+          .collection('plans')
+          .where('endDate', isGreaterThanOrEqualTo: today)
+          .orderBy('endDate')
+          .limit(1)
+          .get();
+      if (upcomingPlan.docs.isNotEmpty) {
+        final data = upcomingPlan.docs.first.data();
+        final matchKey = data['matchKey'] as String?;
+        if (matchKey != null && matchKey.isNotEmpty) {
+          final snap = await FirebaseFirestore.instance
+              .collectionGroup('plans')
+              .where('matchKey', isEqualTo: matchKey)
+              .get();
+          await applyCount(snap, 'plan');
+        }
       }
-    }
+    } catch (_) {}
 
-    final latestMemory = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(userDocId)
-        .collection('memories')
-        .orderBy('date', descending: true)
-        .limit(1)
-        .get();
-    if (latestMemory.docs.isNotEmpty) {
-      final data = latestMemory.docs.first.data();
-      final matchKeys = data['matchKeys'] as List<dynamic>?;
-      if (matchKeys != null && matchKeys.isNotEmpty) {
-        final matchKey = matchKeys.first.toString();
-        final snap = await FirebaseFirestore.instance
-            .collectionGroup('memories')
-            .where('matchKeys', arrayContains: matchKey)
-            .get();
-        await applyCount(snap, 'memory');
+    try {
+      final latestMemory = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userDocId)
+          .collection('memories')
+          .orderBy('date', descending: true)
+          .limit(1)
+          .get();
+      if (latestMemory.docs.isNotEmpty) {
+        final data = latestMemory.docs.first.data();
+        final matchKeys = data['matchKeys'] as List<dynamic>?;
+        if (matchKeys != null && matchKeys.isNotEmpty) {
+          final matchKey = matchKeys.first.toString();
+          final snap = await FirebaseFirestore.instance
+              .collectionGroup('memories')
+              .where('matchKeys', arrayContains: matchKey)
+              .get();
+          await applyCount(snap, 'memory');
+        }
       }
-    }
+    } catch (_) {}
 
-    return _MatchCounts(
-      total: uniqueUsers.length,
+    final sameSchool = counts['school'] ?? 0;
+    final sameNeighborhood = counts['neighborhood'] ?? 0;
+    final similarPlan = counts['plan'] ?? 0;
+    final result = _MatchCounts(
+      total: sameSchool + sameNeighborhood + similarPlan,
       sameMemory: counts['memory'] ?? 0,
-      sameSchool: counts['school'] ?? 0,
-      sameNeighborhood: counts['neighborhood'] ?? 0,
-      similarPlan: counts['plan'] ?? 0,
+      sameSchool: sameSchool,
+      sameNeighborhood: sameNeighborhood,
+      similarPlan: similarPlan,
     );
+    _lastMatchCounts = result;
+    _lastMatchCountsAt = DateTime.now();
+    return result;
   }
 
   String _normalizeMatchValue(String value) {
@@ -528,6 +671,25 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
     return normalized;
   }
 
+  String _buildNeighborhoodMatchKeyFromFields(
+    String province,
+    String district,
+    String dong,
+  ) {
+    final normalizedProvince = _normalizeProvince(province);
+    final normalizedDistrict = _normalizeDistrict(district);
+    final normalizedDong = _normalizeDong(dong);
+    return '$normalizedProvince|$normalizedDistrict|$normalizedDong';
+  }
+
+  bool _rangesOverlap(int startA, int endA, int startB, int endB) {
+    final aStart = startA <= endA ? startA : endA;
+    final aEnd = startA <= endA ? endA : startA;
+    final bStart = startB <= endB ? startB : endB;
+    final bEnd = startB <= endB ? endB : startB;
+    return aStart <= bEnd && bStart <= aEnd;
+  }
+
   int? _parseFlexibleInt(dynamic value) {
     if (value == null) {
       return null;
@@ -549,10 +711,17 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
   String _buildSchoolKeyFromData(Map<String, dynamic> data) {
     final level = data['level']?.toString() ?? '';
     final name = _normalizeMatchValue(data['name']?.toString() ?? '');
+    if (level == 'university') {
+      final code = _normalizeMatchValue(data['schoolCode']?.toString() ?? '');
+      if (code.isNotEmpty) {
+        return '$level|$code';
+      }
+      final campus = _normalizeMatchValue(data['campusType']?.toString() ?? '');
+      return [level, name, campus].join('|');
+    }
     final province = _normalizeProvince(data['province']?.toString() ?? '');
     final district = _normalizeDistrict(data['district']?.toString() ?? '');
-    final dong = _normalizeDong(data['dong']?.toString() ?? '');
-    return [level, name, province, district, dong].join('|');
+    return [level, name, province, district].join('|');
   }
 
   List<String> _buildMatchKeysFromData(
@@ -560,6 +729,22 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
     String schoolKey,
   ) {
     final keys = <String>[];
+    final level = data['level']?.toString() ?? '';
+    if (level == 'kindergarten') {
+      final gradYear = _parseFlexibleInt(data['kindergartenGradYear']);
+      if (gradYear != null) {
+        keys.add('$schoolKey|$gradYear');
+      }
+      return keys;
+    }
+    if (level == 'university') {
+      final major = _normalizeMatchValue(data['major']?.toString() ?? '');
+      final entryYear = _parseFlexibleInt(data['universityEntryYear']);
+      if (major.isNotEmpty && entryYear != null) {
+        keys.add('$schoolKey|$major|$entryYear');
+      }
+      return keys;
+    }
     final gradeEntries = data['gradeEntries'];
     if (gradeEntries is List) {
       for (final entry in gradeEntries) {
@@ -795,15 +980,17 @@ class _RemainingBonusCard extends StatelessWidget {
           const SizedBox(height: 14),
           Row(
             children: [
-              const Text(
-                '출생',
-                style: TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
+              Text(
+                metrics.birthYear == null ? '출생' : '출생(${metrics.birthYear}년)',
+                style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
               ),
               const Spacer(),
               _CurrentAgeBadge(label: metrics.age == null ? '현재 --세' : '현재 ${metrics.age}세'),
               const Spacer(),
               Text(
-                '${targetAge}세',
+                metrics.targetYear == null
+                    ? '${targetAge}세'
+                    : '${targetAge}세(${metrics.targetYear}년)',
                 style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
               ),
             ],
@@ -1205,6 +1392,8 @@ class _UserMetrics {
   const _UserMetrics({
     this.age,
     this.targetAge,
+    this.birthYear,
+    this.targetYear,
     this.livedDays,
     this.remainingDays,
     this.progress,
@@ -1212,6 +1401,8 @@ class _UserMetrics {
 
   final int? age;
   final int? targetAge;
+  final int? birthYear;
+  final int? targetYear;
   final int? livedDays;
   final int? remainingDays;
   final double? progress;
@@ -1640,15 +1831,21 @@ class _HomeBottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surfaceColor = isDark ? theme.colorScheme.surface : Colors.white;
+    final shadowColor = isDark
+        ? theme.colorScheme.shadow.withOpacity(0.35)
+        : const Color(0x1A000000);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: const BoxDecoration(
-        color: Colors.white,
+      decoration: BoxDecoration(
+        color: surfaceColor,
         boxShadow: [
           BoxShadow(
-            color: Color(0x1A000000),
+            color: shadowColor,
             blurRadius: 20,
-            offset: Offset(0, -8),
+            offset: const Offset(0, -8),
           ),
         ],
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
@@ -1707,8 +1904,18 @@ class _NavItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = active ? const Color(0xFFFF7A3D) : const Color(0xFFB0B0B0);
-    final bgColor = active ? const Color(0xFFFFF0E6) : Colors.transparent;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final activeColor =
+        isDark ? theme.colorScheme.primary : const Color(0xFFFF7A3D);
+    final inactiveColor =
+        isDark ? theme.colorScheme.onSurface.withOpacity(0.5) : const Color(0xFFB0B0B0);
+    final color = active ? activeColor : inactiveColor;
+    final bgColor = active
+        ? (isDark
+            ? theme.colorScheme.primary.withOpacity(0.16)
+            : const Color(0xFFFFF0E6))
+        : Colors.transparent;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),

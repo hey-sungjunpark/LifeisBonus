@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -27,6 +29,9 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
   DocumentReference<Map<String, dynamic>>? _threadRef;
   String? _userDocId;
   bool _blocked = false;
+  bool _loading = true;
+  String? _loadError;
+  Timer? _loadTimer;
 
   @override
   void initState() {
@@ -38,52 +43,91 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
   void dispose() {
     _controller.dispose();
     _scrollController.dispose();
+    _loadTimer?.cancel();
     super.dispose();
   }
 
   Future<void> _prepareThread() async {
-    final userDocId = await _userDocIdFuture;
-    if (!mounted || userDocId == null) {
-      return;
-    }
-    _userDocId = userDocId;
-    final blockDoc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(userDocId)
-        .collection('blocks')
-        .doc(widget.otherUserId)
-        .get();
-    _blocked = blockDoc.exists;
-    final threadId = _buildThreadId(userDocId, widget.otherUserId);
-    final ref = FirebaseFirestore.instance.collection('threads').doc(threadId);
-    final snap = await ref.get();
-    if (!snap.exists) {
-      await ref.set({
-        'participants': [userDocId, widget.otherUserId],
-        'participantsKey': threadId,
-        'lastMessage': '',
-        'lastMessageAt': FieldValue.serverTimestamp(),
-        'lastSenderId': userDocId,
-        'unreadCounts': {
-          userDocId: 0,
-          widget.otherUserId: 0,
-        },
-        'lastReadAt': {
-          userDocId: FieldValue.serverTimestamp(),
-        },
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
+    _loadTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _loadError = null;
       });
-    } else {
-      await ref.set({
-        'participants': FieldValue.arrayUnion([userDocId, widget.otherUserId]),
-        'participantsKey': threadId,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
     }
-    setState(() {
-      _threadRef = ref;
+    _loadTimer = Timer(const Duration(seconds: 10), () {
+      if (!mounted || !_loading) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _loadError = '네트워크가 느려서 채팅을 불러오지 못했어요.';
+      });
     });
+    try {
+      final userDocId = await _userDocIdFuture.timeout(
+        const Duration(seconds: 8),
+        onTimeout: () => null,
+      );
+      if (!mounted) {
+        return;
+      }
+      if (userDocId == null) {
+        setState(() {
+          _loading = false;
+          _loadError = '로그인이 필요하거나 네트워크가 지연되고 있어요.';
+        });
+        return;
+      }
+      _userDocId = userDocId;
+      final threadId = _buildThreadId(userDocId, widget.otherUserId);
+      final ref = FirebaseFirestore.instance.collection('threads').doc(threadId);
+      _loadTimer?.cancel();
+      setState(() {
+        _threadRef = ref;
+        _loading = false;
+        _loadError = null;
+      });
+      // Fire-and-forget: avoid blocking UI on slow Firestore calls.
+      FirebaseFirestore.instance
+          .collection('users')
+          .doc(userDocId)
+          .collection('blocks')
+          .doc(widget.otherUserId)
+          .get()
+          .then((blockDoc) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _blocked = blockDoc.exists;
+        });
+      });
+      ref.get().then((snap) {
+        if (!snap.exists) {
+          return ref.set({
+            'participants': [userDocId, widget.otherUserId],
+            'participantsKey': threadId,
+            'createdAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+        return ref.set({
+          'participants': FieldValue.arrayUnion([userDocId, widget.otherUserId]),
+          'participantsKey': threadId,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      _loadTimer?.cancel();
+      setState(() {
+        _loading = false;
+        _loadError = '채팅을 불러오지 못했어요.\n${e.runtimeType}: $e';
+      });
+    }
   }
 
   String _buildThreadId(String a, String b) {
@@ -120,16 +164,19 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
     }
     _controller.clear();
     final messageRef = _threadRef!.collection('messages').doc();
+    final sentAt = Timestamp.now();
     await messageRef.set({
       'senderId': _userDocId,
       'text': text,
       'createdAt': FieldValue.serverTimestamp(),
       'clientSentAt': DateTime.now().toIso8601String(),
-      'sentAt': Timestamp.now(),
+      'sentAt': sentAt,
     });
     await _threadRef!.set({
+      'participants': FieldValue.arrayUnion([_userDocId!, widget.otherUserId]),
+      'participantsKey': _buildThreadId(_userDocId!, widget.otherUserId),
       'lastMessage': text,
-      'lastMessageAt': FieldValue.serverTimestamp(),
+      'lastMessageAt': sentAt,
       'lastSenderId': _userDocId,
       'unreadCounts.${widget.otherUserId}': FieldValue.increment(1),
       'unreadCounts.${_userDocId!}': 0,
@@ -165,6 +212,43 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
       return sentAt;
     }
     return _parseTimestamp(data['clientSentAt']);
+  }
+
+  int _resolveUnreadCount(Map<String, dynamic> data, String userId) {
+    final unreadCounts =
+        (data['unreadCounts'] as Map?)?.cast<String, dynamic>();
+    final direct = unreadCounts?[userId];
+    if (direct is num) {
+      return direct.toInt();
+    }
+    final fallback = data['unreadCounts.$userId'];
+    if (fallback is num) {
+      return fallback.toInt();
+    }
+    final lastSenderId = data['lastSenderId']?.toString();
+    final lastMessageAtValue = data['lastMessageAt'];
+    DateTime? lastMessageAt;
+    if (lastMessageAtValue is Timestamp) {
+      lastMessageAt = lastMessageAtValue.toDate();
+    } else if (lastMessageAtValue is String) {
+      lastMessageAt = DateTime.tryParse(lastMessageAtValue);
+    }
+    final lastReadAtMap =
+        (data['lastReadAt'] as Map?)?.cast<String, dynamic>();
+    DateTime? lastReadAt;
+    final lastReadValue = lastReadAtMap?[userId] ?? data['lastReadAt.$userId'];
+    if (lastReadValue is Timestamp) {
+      lastReadAt = lastReadValue.toDate();
+    } else if (lastReadValue is String) {
+      lastReadAt = DateTime.tryParse(lastReadValue);
+    }
+    if (lastSenderId != null &&
+        lastSenderId != userId &&
+        lastMessageAt != null &&
+        (lastReadAt == null || lastMessageAt.isAfter(lastReadAt))) {
+      return 1;
+    }
+    return 0;
   }
 
   @override
@@ -251,23 +335,64 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
               ),
             ],
           ),
-          body: _threadRef == null
+          body: _loading
               ? const Center(child: CircularProgressIndicator())
+              : _loadError != null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.error_outline,
+                                color: Color(0xFFFF6B6B), size: 42),
+                            const SizedBox(height: 12),
+                            Text(
+                              _loadError!,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 12),
+                            OutlinedButton(
+                              onPressed: () {
+                                setState(() {
+                                  _loading = true;
+                                  _loadError = null;
+                                });
+                                _prepareThread();
+                              },
+                              child: const Text('다시 시도'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : _threadRef == null
+                      ? const SizedBox.shrink()
               : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                   stream: _threadRef!.snapshots(),
                   builder: (context, threadSnap) {
                     final threadData = threadSnap.data?.data() ?? {};
+                    final otherUnread =
+                        _resolveUnreadCount(threadData, widget.otherUserId);
                     final lastReadAtMap =
                         (threadData['lastReadAt'] as Map?)?.cast<String, dynamic>();
-                    final otherReadAt =
-                        _parseTimestamp(lastReadAtMap?[widget.otherUserId]);
+                    final otherReadAt = _parseTimestamp(
+                          lastReadAtMap?[widget.otherUserId],
+                        ) ??
+                        _parseTimestamp(
+                          threadData['lastReadAt.${widget.otherUserId}'],
+                        );
                     return Column(
                       children: [
                         Expanded(
                           child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                             stream: _threadRef!
                                 .collection('messages')
-                                .orderBy('createdAt', descending: true)
+                                .orderBy('sentAt', descending: true)
                                 .limit(60)
                                 .snapshots(),
                             builder: (context, snapshot) {
@@ -323,6 +448,7 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
                                   final createdAt = _parseMessageTime(data);
                                   final isMe = senderId == _userDocId;
                                   final showUnread = isMe &&
+                                      otherUnread > 0 &&
                                       (otherReadAt == null ||
                                           (createdAt != null &&
                                               createdAt.isAfter(otherReadAt)));
@@ -448,7 +574,8 @@ class _ChatInput extends StatelessWidget {
             ElevatedButton(
               onPressed: onSend,
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF8E5BFF),
+                backgroundColor: const Color(0xFFFFC83D),
+                foregroundColor: const Color(0xFF4A3700),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),

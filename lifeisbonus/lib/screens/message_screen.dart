@@ -46,7 +46,7 @@ class _MessageScreenState extends State<MessageScreen> {
       if (keys.isEmpty) {
         return 0;
       }
-      final uniqueUsers = <String>{};
+      var matchCount = 0;
       for (var i = 0; i < keys.length; i += 10) {
         final batch = keys.sublist(
           i,
@@ -64,10 +64,16 @@ class _MessageScreenState extends State<MessageScreen> {
           if (resolvedId == null || resolvedId == ownerId) {
             continue;
           }
-          uniqueUsers.add(resolvedId);
+          final docKeys = data['matchKeys'];
+          if (docKeys is List) {
+            matchCount += docKeys
+                .map((key) => key.toString())
+                .where(batch.contains)
+                .length;
+          }
         }
       }
-      return uniqueUsers.length;
+      return matchCount;
     }
 
     try {
@@ -519,9 +525,7 @@ class _ThreadSection extends StatelessWidget {
                 }
                 final pinnedBy = (data['pinnedBy'] as Map?)?.cast<String, dynamic>();
                 final isPinned = pinnedBy != null && pinnedBy[userDocId] == true;
-                final unreadCounts = (data['unreadCounts'] as Map?)
-                    ?.cast<String, dynamic>();
-                final unread = unreadCounts?[userDocId];
+                final unread = _resolveUnreadCount(data, userDocId ?? '');
                 return _ThreadItem(
                   threadId: doc.id,
                   otherUserId: otherId,
@@ -786,11 +790,10 @@ class _ThreadTile extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 4),
-                  Text(
-                    isPremium ? item.lastMessage : '프리미엄 가입 후 확인할 수 있어요',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
+                  _ThreadLastMessage(
+                    threadId: item.threadId,
+                    isPremium: isPremium,
+                    fallbackText: item.lastMessage,
                   ),
                 ],
               ),
@@ -855,6 +858,63 @@ class _ThreadTile extends StatelessWidget {
   }
 }
 
+class _ThreadLastMessage extends StatelessWidget {
+  const _ThreadLastMessage({
+    required this.threadId,
+    required this.isPremium,
+    required this.fallbackText,
+  });
+
+  final String threadId;
+  final bool isPremium;
+  final String fallbackText;
+
+  Future<String?> _loadLatestMessage() async {
+    final snap = await FirebaseFirestore.instance
+        .collection('threads')
+        .doc(threadId)
+        .collection('messages')
+        .orderBy('sentAt', descending: true)
+        .limit(1)
+        .get();
+    if (snap.docs.isEmpty) {
+      return null;
+    }
+    final data = snap.docs.first.data();
+    final text = data['text']?.toString();
+    if (text != null && text.trim().isNotEmpty) {
+      return text.trim();
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final baseText =
+        isPremium ? fallbackText : '프리미엄 가입 후 확인할 수 있어요';
+    if (!isPremium || fallbackText.trim().isNotEmpty) {
+      return Text(
+        baseText,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
+      );
+    }
+    return FutureBuilder<String?>(
+      future: _loadLatestMessage(),
+      builder: (context, snapshot) {
+        final text = snapshot.data?.trim();
+        return Text(
+          text?.isNotEmpty == true ? text! : baseText,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
+        );
+      },
+    );
+  }
+}
+
 enum _ThreadAction { pin, delete, block, report }
 
 String _formatCount(int count) {
@@ -877,6 +937,29 @@ int _resolveUnreadCount(Map<String, dynamic> data, String userId) {
   final fallback = data['unreadCounts.$userId'];
   if (fallback is num) {
     return fallback.toInt();
+  }
+  final lastSenderId = data['lastSenderId']?.toString();
+  final lastMessageAtValue = data['lastMessageAt'];
+  DateTime? lastMessageAt;
+  if (lastMessageAtValue is Timestamp) {
+    lastMessageAt = lastMessageAtValue.toDate();
+  } else if (lastMessageAtValue is String) {
+    lastMessageAt = DateTime.tryParse(lastMessageAtValue);
+  }
+  final lastReadAtMap =
+      (data['lastReadAt'] as Map?)?.cast<String, dynamic>();
+  DateTime? lastReadAt;
+  final lastReadValue = lastReadAtMap?[userId] ?? data['lastReadAt.$userId'];
+  if (lastReadValue is Timestamp) {
+    lastReadAt = lastReadValue.toDate();
+  } else if (lastReadValue is String) {
+    lastReadAt = DateTime.tryParse(lastReadValue);
+  }
+  if (lastSenderId != null &&
+      lastSenderId != userId &&
+      lastMessageAt != null &&
+      (lastReadAt == null || lastMessageAt.isAfter(lastReadAt))) {
+    return 1;
   }
   return 0;
 }

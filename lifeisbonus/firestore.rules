@@ -4,6 +4,9 @@ service cloud.firestore {
     match /{path=**}/schools/{schoolId} {
       allow read: if true;
     }
+    match /{path=**}/neighborhoods/{neighborhoodId} {
+      allow read: if true;
+    }
 
     match /threads/{threadId} {
       allow read: if true;

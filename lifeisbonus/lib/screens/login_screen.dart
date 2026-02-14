@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -581,70 +582,100 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              Color(0xFFFFF4E6),
-              Color(0xFFFCE7F1),
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 26),
-            child: Column(
-              children: [
-                const SizedBox(height: 18),
-                const _LoginHeader(),
-                const SizedBox(height: 16),
-                _MethodTabs(
-                  currentIndex: _methodIndex,
-                  onChanged: (index) {
-                    setState(() {
-                      _methodIndex = index;
-                      _smsCodeSent = false;
-                      _phoneVerified = false;
-                      _phoneVerificationId = null;
-                      _phoneCodeController.clear();
-                    });
-                  },
-                ),
-                const SizedBox(height: 26),
-                _methodIndex == 0
-                    ? _LoginCard(
-                        emailController: _emailController,
-                        passwordController: _passwordController,
-                        isLoading: _isLoading,
-                        onLoginPressed: _handleEmailLogin,
-                      )
-                    : _PhoneLoginCard(
-                        countryCode: _countryCode,
-                        onSelectCountryCode: _selectCountryCode,
-                        phoneController: _phoneController,
-                        codeController: _phoneCodeController,
-                        smsCodeSent: _smsCodeSent,
-                        phoneVerified: _phoneVerified,
-                        isVerifying: _isVerifying,
-                        onSendCode: _sendPhoneCode,
-                        onVerifyCode: _verifyPhoneCode,
-                        onLoginPressed: _handlePhoneLogin,
-                      ),
-                const SizedBox(height: 18),
-                const _DividerOr(),
-                const SizedBox(height: 18),
-                _SocialButtons(
-                  onGooglePressed: _handleGoogleLogin,
-                  onKakaoPressed: _handleKakaoLogin,
-                  onNaverPressed: _handleNaverLogin,
-                ),
-                const SizedBox(height: 24),
-                const _LegalText(),
-                const SizedBox(height: 24),
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        systemNavigationBarColor: Color(0xFFFCE7F1),
+        systemNavigationBarIconBrightness: Brightness.dark,
+        statusBarIconBrightness: Brightness.dark,
+      ),
+      child: Scaffold(
+        extendBody: true,
+        backgroundColor: const Color(0xFFFCE7F1),
+        body: DecoratedBox(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Color(0xFFFFF4E6),
+                Color(0xFFFCE7F1),
               ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: SizedBox.expand(
+            child: SafeArea(
+              bottom: false,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return SingleChildScrollView(
+                    padding: EdgeInsets.fromLTRB(26, 0, 26, 24 + bottomInset),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: constraints.maxHeight,
+                      ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          children: [
+                            const SizedBox(height: 18),
+                            const _LoginHeader(),
+                            const SizedBox(height: 16),
+                            _MethodTabs(
+                              currentIndex: _methodIndex,
+                              onChanged: (index) {
+                                setState(() {
+                                  _methodIndex = index;
+                                  _smsCodeSent = false;
+                                  _phoneVerified = false;
+                                  _phoneVerificationId = null;
+                                  _phoneCodeController.clear();
+                                });
+                              },
+                            ),
+                            const SizedBox(height: 26),
+                            _methodIndex == 0
+                                ? _LoginCard(
+                                    emailController: _emailController,
+                                    passwordController: _passwordController,
+                                    isLoading: _isLoading,
+                                    onLoginPressed: _handleEmailLogin,
+                                  )
+                                : _PhoneLoginCard(
+                                    countryCode: _countryCode,
+                                    onSelectCountryCode: _selectCountryCode,
+                                    phoneController: _phoneController,
+                                    codeController: _phoneCodeController,
+                                    smsCodeSent: _smsCodeSent,
+                                    phoneVerified: _phoneVerified,
+                                    isVerifying: _isVerifying,
+                                    onSendCode: _sendPhoneCode,
+                                    onVerifyCode: _verifyPhoneCode,
+                                    onLoginPressed: _handlePhoneLogin,
+                                  ),
+                            const SizedBox(height: 18),
+                            const _DividerOr(),
+                            const SizedBox(height: 18),
+                            _SocialButtons(
+                              onGooglePressed: _handleGoogleLogin,
+                              onKakaoPressed: _handleKakaoLogin,
+                              onNaverPressed: _handleNaverLogin,
+                            ),
+                            const SizedBox(height: 24),
+                          ],
+                        ),
+                        const Padding(
+                          padding: EdgeInsets.only(bottom: 24),
+                          child: _LegalText(),
+                        ),
+                      ],
+                    ),
+                    ),
+                  );
+                },
+              ),
             ),
           ),
         ),

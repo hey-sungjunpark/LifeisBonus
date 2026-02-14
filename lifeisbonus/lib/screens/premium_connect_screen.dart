@@ -73,17 +73,30 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
         if (schoolKey.isEmpty || computedKeys.isEmpty) {
           continue;
         }
-        if (data['schoolKey'] == null || data['matchKeys'] == null) {
+        final existingKeys = data['matchKeys'];
+        final existingSet = existingKeys is List
+            ? existingKeys.map((key) => key.toString()).toSet()
+            : <String>{};
+        final computedSet = computedKeys.toSet();
+        final needsUpdate =
+            (data['schoolKey'] != schoolKey) ||
+            (computedSet.isNotEmpty &&
+                (existingSet.isEmpty ||
+                    existingSet.length != computedSet.length ||
+                    !existingSet.containsAll(computedSet)));
+        if (needsUpdate || data['ownerId'] == null) {
           await doc.reference.set({
             'schoolKey': schoolKey,
             'matchKeys': computedKeys,
+            'ownerId': userDocId,
+            'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
         }
         matchKeyMap.putIfAbsent(schoolKey, () => <String>{});
         matchKeyMap[schoolKey]!.addAll(computedKeys);
       }
       if (matchKeyMap.isNotEmpty) {
-        final matchedUsers = <String>{};
+        var matchCount = 0;
         final allKeys = matchKeyMap.values
             .expand((keys) => keys)
             .where((key) => key.isNotEmpty)
@@ -94,18 +107,18 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
               .collectionGroup('schools')
               .where('matchKeys', arrayContains: key)
               .get();
-          for (final matchDoc in matchSnap.docs) {
-            final data = matchDoc.data();
+          for (final doc in matchSnap.docs) {
+            final data = doc.data();
             final ownerId = data['ownerId'] as String?;
-            final parentUserId = matchDoc.reference.parent.parent?.id;
+            final parentUserId = doc.reference.parent.parent?.id;
             final resolvedId = ownerId ?? parentUserId;
             if (resolvedId == null || resolvedId == userDocId) {
               continue;
             }
-            matchedUsers.add(resolvedId);
+            matchCount += 1;
           }
         }
-        _schoolMatchCount = matchedUsers.length;
+        _schoolMatchCount = matchCount;
         _schoolMatchLabel = lastSchoolName;
       }
     }
@@ -218,10 +231,17 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
   String _buildSchoolKeyFromData(Map<String, dynamic> data) {
     final level = data['level']?.toString() ?? '';
     final name = _normalize(data['name']?.toString() ?? '');
+    if (level == 'university') {
+      final code = _normalize(data['schoolCode']?.toString() ?? '');
+      if (code.isNotEmpty) {
+        return '$level|$code';
+      }
+      final campus = _normalize(data['campusType']?.toString() ?? '');
+      return [level, name, campus].join('|');
+    }
     final province = _normalizeProvince(data['province']?.toString() ?? '');
     final district = _normalizeDistrict(data['district']?.toString() ?? '');
-    final dong = _normalizeDong(data['dong']?.toString() ?? '');
-    return [level, name, province, district, dong].join('|');
+    return [level, name, province, district].join('|');
   }
 
   List<String> _buildMatchKeysFromData(
@@ -229,6 +249,22 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
     String schoolKey,
   ) {
     final keys = <String>[];
+    final level = data['level']?.toString() ?? '';
+    if (level == 'kindergarten') {
+      final gradYear = _parseFlexibleInt(data['kindergartenGradYear']);
+      if (gradYear != null) {
+        keys.add('$schoolKey|$gradYear');
+      }
+      return keys;
+    }
+    if (level == 'university') {
+      final major = _normalize(data['major']?.toString() ?? '');
+      final entryYear = _parseFlexibleInt(data['universityEntryYear']);
+      if (major.isNotEmpty && entryYear != null) {
+        keys.add('$schoolKey|$major|$entryYear');
+      }
+      return keys;
+    }
     final gradeEntries = data['gradeEntries'];
     if (gradeEntries is List) {
       for (final entry in gradeEntries) {
