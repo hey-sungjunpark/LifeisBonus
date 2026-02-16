@@ -616,60 +616,53 @@ class _LoginScreenState extends State<LoginScreen> {
                         minHeight: constraints.maxHeight,
                       ),
                     child: Column(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Column(
-                          children: [
-                            const SizedBox(height: 18),
-                            const _LoginHeader(),
-                            const SizedBox(height: 16),
-                            _MethodTabs(
-                              currentIndex: _methodIndex,
-                              onChanged: (index) {
-                                setState(() {
-                                  _methodIndex = index;
-                                  _smsCodeSent = false;
-                                  _phoneVerified = false;
-                                  _phoneVerificationId = null;
-                                  _phoneCodeController.clear();
-                                });
-                              },
-                            ),
-                            const SizedBox(height: 26),
-                            _methodIndex == 0
-                                ? _LoginCard(
-                                    emailController: _emailController,
-                                    passwordController: _passwordController,
-                                    isLoading: _isLoading,
-                                    onLoginPressed: _handleEmailLogin,
-                                  )
-                                : _PhoneLoginCard(
-                                    countryCode: _countryCode,
-                                    onSelectCountryCode: _selectCountryCode,
-                                    phoneController: _phoneController,
-                                    codeController: _phoneCodeController,
-                                    smsCodeSent: _smsCodeSent,
-                                    phoneVerified: _phoneVerified,
-                                    isVerifying: _isVerifying,
-                                    onSendCode: _sendPhoneCode,
-                                    onVerifyCode: _verifyPhoneCode,
-                                    onLoginPressed: _handlePhoneLogin,
-                                  ),
-                            const SizedBox(height: 18),
-                            const _DividerOr(),
-                            const SizedBox(height: 18),
-                            _SocialButtons(
-                              onGooglePressed: _handleGoogleLogin,
-                              onKakaoPressed: _handleKakaoLogin,
-                              onNaverPressed: _handleNaverLogin,
-                            ),
-                            const SizedBox(height: 24),
-                          ],
+                        const SizedBox(height: 18),
+                        const _LoginHeader(),
+                        const SizedBox(height: 16),
+                        _MethodTabs(
+                          currentIndex: _methodIndex,
+                          onChanged: (index) {
+                            setState(() {
+                              _methodIndex = index;
+                              _smsCodeSent = false;
+                              _phoneVerified = false;
+                              _phoneVerificationId = null;
+                              _phoneCodeController.clear();
+                            });
+                          },
                         ),
-                        const Padding(
-                          padding: EdgeInsets.only(bottom: 24),
-                          child: _LegalText(),
+                        const SizedBox(height: 26),
+                        _methodIndex == 0
+                            ? _LoginCard(
+                                emailController: _emailController,
+                                passwordController: _passwordController,
+                                isLoading: _isLoading,
+                                onLoginPressed: _handleEmailLogin,
+                              )
+                            : _PhoneLoginCard(
+                                countryCode: _countryCode,
+                                onSelectCountryCode: _selectCountryCode,
+                                phoneController: _phoneController,
+                                codeController: _phoneCodeController,
+                                smsCodeSent: _smsCodeSent,
+                                phoneVerified: _phoneVerified,
+                                isVerifying: _isVerifying,
+                                onSendCode: _sendPhoneCode,
+                                onVerifyCode: _verifyPhoneCode,
+                                onLoginPressed: _handlePhoneLogin,
+                              ),
+                        const SizedBox(height: 18),
+                        const _DividerOr(),
+                        const SizedBox(height: 18),
+                        _SocialButtons(
+                          onGooglePressed: _handleGoogleLogin,
+                          onKakaoPressed: _handleKakaoLogin,
+                          onNaverPressed: _handleNaverLogin,
                         ),
+                        const SizedBox(height: 10),
+                        const _LegalText(),
+                        const SizedBox(height: 8),
                       ],
                     ),
                     ),
@@ -1289,10 +1282,11 @@ class _SocialButtons extends StatelessWidget {
           background: Colors.white,
           textColor: const Color(0xFF5E5E5E),
           borderColor: const Color(0xFFE2E2E2),
-          icon: const Icon(
-            Icons.g_mobiledata_rounded,
-            color: Color(0xFF4285F4),
-            size: 24,
+          icon: Image.asset(
+            'assets/logos/google-logo.png',
+            width: 18,
+            height: 18,
+            fit: BoxFit.contain,
           ),
           onPressed: onGooglePressed,
         ),
@@ -1301,10 +1295,11 @@ class _SocialButtons extends StatelessWidget {
           label: '카카오로 시작하기',
           background: Color(0xFFFEE500),
           textColor: Color(0xFF3C1E1E),
-          icon: Icon(
-            Icons.chat_bubble_rounded,
-            color: Color(0xFF3C1E1E),
-            size: 18,
+          icon: Image.asset(
+            'assets/logos/kakao-logo.png',
+            width: 22,
+            height: 22,
+            fit: BoxFit.contain,
           ),
           onPressed: onKakaoPressed,
         ),
@@ -1313,10 +1308,11 @@ class _SocialButtons extends StatelessWidget {
           label: '네이버로 시작하기',
           background: Color(0xFF03C75A),
           textColor: Colors.white,
-          icon: Icon(
-            Icons.circle,
-            color: Colors.white,
-            size: 10,
+          icon: Image.asset(
+            'assets/logos/naver-logo.png',
+            width: 24,
+            height: 24,
+            fit: BoxFit.contain,
           ),
           onPressed: onNaverPressed,
         ),
@@ -1382,14 +1378,27 @@ class _LegalText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      '로그인하시면 서비스 이용약관과\n개인정보 처리방침에 동의한 것으로 간주됩니다.',
-      textAlign: TextAlign.center,
-      style: const TextStyle(
-        fontSize: 11,
-        height: 1.5,
-        color: Color(0xFFB0B0B0),
+    return const Text.rich(
+      TextSpan(
+        style: TextStyle(
+          fontSize: 11,
+          height: 1.5,
+          color: Color(0xFFB0B0B0),
+        ),
+        children: [
+          TextSpan(text: '회원 가입 및 로그인 시 '),
+          TextSpan(
+            text: '개인정보 처리방침,\n',
+            style: TextStyle(decoration: TextDecoration.underline),
+          ),
+          TextSpan(
+            text: '서비스 이용약관',
+            style: TextStyle(decoration: TextDecoration.underline),
+          ),
+          TextSpan(text: '에 동의하시는 것을 의미합니다.'),
+        ],
       ),
+      textAlign: TextAlign.center,
     );
   }
 }

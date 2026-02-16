@@ -54,6 +54,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_launcher_icons: ^0.13.1
+  flutter_native_splash: ^2.4.2
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -74,13 +75,30 @@ flutter:
   uses-material-design: true
 
   assets:
+    - assets/lifeisbonus-app-icon.png
     - assets/icons/school_building.svg
+    - assets/logos/google-logo.png
+    - assets/logos/kakao-logo.png
+    - assets/logos/naver-logo.png
 
 flutter_launcher_icons:
   android: true
   ios: true
   image_path: assets/lifeisbonus-app-icon.png
   min_sdk_android: 21
+
+flutter_native_splash:
+  color: "#FFF4E6"
+  color_dark: "#FFF4E6"
+  image: assets/lifeisbonus-app-icon.png
+  android_gravity: center
+  ios_content_mode: scaleAspectFit
+  android: true
+  ios: true
+  android_12:
+    color: "#FFF4E6"
+    image: assets/lifeisbonus-app-icon.png
+    icon_background_color: "#FFF4E6"
 
   # To add assets to your application, add an assets section, like this:
   # assets:

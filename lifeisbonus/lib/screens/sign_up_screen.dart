@@ -706,111 +706,129 @@ class _SignUpScreenState extends State<SignUpScreen> {
           ),
         ),
         child: SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 26),
-            child: Column(
-              children: [
-                const SizedBox(height: 18),
-                const _Header(),
-                const SizedBox(height: 20),
-                _MethodTabs(
-                  currentIndex: _methodIndex,
-                  onChanged: (index) {
-                    setState(() {
-                      _methodIndex = index;
-                      _resetVerificationState();
-                    });
-                  },
-                ),
-                const SizedBox(height: 16),
-                _SignUpCard(
-                  methodIndex: _methodIndex,
-                  emailController: _emailController,
-                  phoneController: _phoneController,
-                  phoneCodeController: _phoneCodeController,
-                  passwordController: _passwordController,
-                  confirmController: _confirmController,
-                  nicknameController: _nicknameController,
-                  isCheckingNickname: _isCheckingNickname,
-                  isNicknameChecked: _isNicknameChecked,
-                  onCheckNickname: _checkNicknameAvailability,
-                  birthDateLabel: _birthDateLabel,
-                  onPickBirthDate: _pickBirthDate,
-                  birthFieldKey: _birthFieldKey,
-                  verificationSent: _verificationSent,
-                  emailVerified: _emailVerified,
-                  onSendVerification: _isVerifying ? null : _sendVerificationEmail,
-                  onCheckVerification: _checkEmailVerified,
-                  smsCodeSent: _smsCodeSent,
-                  phoneVerified: _phoneVerified,
-                  onSendPhoneCode: _isVerifying ? null : _sendPhoneCode,
-                  onVerifyPhoneCode: _verifyPhoneCode,
-                  countryCode: _countryCode,
-                  onSelectCountryCode: _selectCountryCode,
-                ),
-                const SizedBox(height: 18),
-                SizedBox(
-                  height: 46,
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _isSubmitting ? null : _completeSignUp,
-                    style: ElevatedButton.styleFrom(
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 26),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 18),
+                      const _Header(),
+                      const SizedBox(height: 20),
+                      _MethodTabs(
+                        currentIndex: _methodIndex,
+                        onChanged: (index) {
+                          setState(() {
+                            _methodIndex = index;
+                            _resetVerificationState();
+                          });
+                        },
                       ),
-                      padding: EdgeInsets.zero,
-                      backgroundColor: Colors.transparent,
-                      shadowColor: Colors.transparent,
-                    ),
-                    child: Ink(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                        gradient: const LinearGradient(
-                          colors: [
-                            Color(0xFFFF7A3D),
-                            Color(0xFFFF4FA6),
-                          ],
+                      const SizedBox(height: 16),
+                      _SignUpCard(
+                        methodIndex: _methodIndex,
+                        emailController: _emailController,
+                        phoneController: _phoneController,
+                        phoneCodeController: _phoneCodeController,
+                        passwordController: _passwordController,
+                        confirmController: _confirmController,
+                        nicknameController: _nicknameController,
+                        isCheckingNickname: _isCheckingNickname,
+                        isNicknameChecked: _isNicknameChecked,
+                        onCheckNickname: _checkNicknameAvailability,
+                        birthDateLabel: _birthDateLabel,
+                        onPickBirthDate: _pickBirthDate,
+                        birthFieldKey: _birthFieldKey,
+                        verificationSent: _verificationSent,
+                        emailVerified: _emailVerified,
+                        onSendVerification: _isVerifying ? null : _sendVerificationEmail,
+                        onCheckVerification: _checkEmailVerified,
+                        smsCodeSent: _smsCodeSent,
+                        phoneVerified: _phoneVerified,
+                        onSendPhoneCode: _isVerifying ? null : _sendPhoneCode,
+                        onVerifyPhoneCode: _verifyPhoneCode,
+                        countryCode: _countryCode,
+                        onSelectCountryCode: _selectCountryCode,
+                      ),
+                      const SizedBox(height: 18),
+                      SizedBox(
+                        height: 46,
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _isSubmitting ? null : _completeSignUp,
+                          style: ElevatedButton.styleFrom(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            padding: EdgeInsets.zero,
+                            backgroundColor: Colors.transparent,
+                            shadowColor: Colors.transparent,
+                          ),
+                          child: Ink(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              gradient: const LinearGradient(
+                                colors: [
+                                  Color(0xFFFF7A3D),
+                                  Color(0xFFFF4FA6),
+                                ],
+                              ),
+                            ),
+                            child: Center(
+                              child: _isSubmitting
+                                  ? const SizedBox(
+                                      height: 18,
+                                      width: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(Colors.white),
+                                      ),
+                                    )
+                                  : const Text(
+                                      '가입 완료하기',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                            ),
+                          ),
                         ),
                       ),
-                      child: Center(
-                        child: _isSubmitting
-                            ? const SizedBox(
-                                height: 18,
-                                width: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor:
-                                      AlwaysStoppedAnimation<Color>(Colors.white),
-                                ),
-                              )
-                            : const Text(
-                                '가입 완료하기',
+                      const SizedBox(height: 18),
+                      TextButton(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                        },
+                        child: const Text.rich(
+                          TextSpan(
+                            text: '이미 계정이 있으신가요? ',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF8A8A8A),
+                            ),
+                            children: [
+                              TextSpan(
+                                text: '로그인',
                                 style: TextStyle(
-                                  fontSize: 14,
+                                  color: Color(0xFFFF7A3D),
                                   fontWeight: FontWeight.w700,
-                                  color: Colors.white,
                                 ),
                               ),
+                            ],
+                          ),
+                        ),
                       ),
-                    ),
+                      const SizedBox(height: 18),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 18),
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                  },
-                  child: const Text(
-                    '이미 계정이 있으신가요? 로그인',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF8A8A8A),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 18),
-              ],
-            ),
+              );
+            },
           ),
         ),
       ),

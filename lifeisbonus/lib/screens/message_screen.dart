@@ -1071,7 +1071,7 @@ class _PremiumActiveInfo extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         color: const Color(0xFFE8FFF1),
         borderRadius: BorderRadius.circular(16),

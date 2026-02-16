@@ -5,7 +5,6 @@ import 'package:kakao_flutter_sdk_user/kakao_flutter_sdk_user.dart';
 import 'package:flutter_naver_login/flutter_naver_login.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../app_theme.dart';
 import '../services/premium_service.dart';
 import 'login_screen.dart';
 
@@ -18,13 +17,13 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _alertsEnabled = true;
-  bool _darkMode = false;
   bool _loadingProfile = true;
   String? _nickname;
   int? _age;
   String? _userDocId;
   PremiumStatus? _premiumStatus;
   bool _loadingPremium = false;
+  bool _deletingAccount = false;
 
   static final RegExp _nicknamePattern = RegExp(r'^[a-zA-Z0-9가-힣]+$');
   static const int _minNicknameLength = 2;
@@ -54,7 +53,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _darkMode = AppThemeController.mode.value == ThemeMode.dark;
     _loadProfile();
     _loadPremiumStatus();
   }
@@ -193,6 +191,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         return;
                       }
                       await PremiumService.cancelSubscription();
+                      if (!mounted) {
+                        return;
+                      }
+                      await showDialog<void>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('안내'),
+                          content: const Text('프리미엄 구독이 해지되었습니다'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              child: const Text('확인'),
+                            ),
+                          ],
+                        ),
+                      );
                       if (!mounted) {
                         return;
                       }
@@ -554,6 +568,117 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Future<void> _deleteAccount() async {
+    if (_deletingAccount) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('회원 탈퇴'),
+          content: const Text('정말 탈퇴할까요? 탈퇴하면 저장된 정보가 모두 삭제됩니다.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('취소'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF6B6B),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('탈퇴하기'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) {
+      return;
+    }
+    setState(() {
+      _deletingAccount = true;
+    });
+
+    final userDocId = await _resolveUserDocId();
+    if (userDocId == null) {
+      if (mounted) {
+        setState(() {
+          _deletingAccount = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('로그인 정보가 없어 탈퇴할 수 없어요.')),
+        );
+      }
+      return;
+    }
+
+    Future<void> deleteCollection(CollectionReference ref, String label) async {
+      final snap = await ref.get();
+      for (final doc in snap.docs) {
+        await doc.reference.delete();
+      }
+      debugPrint('[delete-account] deleted $label: ${snap.size}');
+    }
+
+    try {
+      final userRef = FirebaseFirestore.instance.collection('users').doc(userDocId);
+      debugPrint('[delete-account] userDocId=$userDocId');
+      await deleteCollection(userRef.collection('schools'), 'schools');
+      await deleteCollection(userRef.collection('neighborhoods'), 'neighborhoods');
+      await deleteCollection(userRef.collection('plans'), 'plans');
+      await deleteCollection(userRef.collection('memories'), 'memories');
+      await deleteCollection(userRef.collection('media'), 'media');
+      await deleteCollection(userRef.collection('blocks'), 'blocks');
+      await deleteCollection(userRef.collection('reports'), 'reports');
+      await userRef.delete();
+      debugPrint('[delete-account] user doc deleted');
+    } catch (e) {
+      debugPrint('[delete-account] firestore error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('탈퇴 중 오류가 발생했어요. ($e)')),
+        );
+      }
+    } catch (_) {}
+
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      await currentUser?.delete();
+    } catch (e) {
+      debugPrint('[delete-account] auth delete error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('탈퇴는 완료되었지만, 계정 삭제를 위해 다시 로그인해주세요.')),
+        );
+      }
+    }
+
+    try {
+      await UserApi.instance.unlink();
+    } catch (_) {}
+    try {
+      await FlutterNaverLogin.logOut();
+    } catch (_) {}
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('lastProvider');
+    await prefs.remove('lastProviderId');
+
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _deletingAccount = false;
+    });
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (context) => const LoginScreen()),
+      (route) => false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -697,18 +822,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     });
                   },
                 ),
-                Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
-                _SettingToggleRow(
-                  icon: Icons.dark_mode_outlined,
-                  label: '다크 모드',
-                  value: _darkMode,
-                  onChanged: (value) {
-                    setState(() {
-                      _darkMode = value;
-                    });
-                    AppThemeController.setDarkMode(value);
-                  },
-                ),
               ],
             ),
           ),
@@ -735,6 +848,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const _SettingRow(
                   icon: Icons.support_agent_rounded,
                   label: '고객센터',
+                ),
+                Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
+                _SettingRow(
+                  icon: Icons.person_remove_alt_1_rounded,
+                  label: _deletingAccount ? '탈퇴 처리 중...' : '탈퇴하기',
+                  trailing: _deletingAccount
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.chevron_right, color: Color(0xFFBDBDBD)),
+                  onTap: _deletingAccount ? null : _deleteAccount,
                 ),
               ],
             ),
@@ -869,12 +995,14 @@ class _SettingRow extends StatelessWidget {
     required this.label,
     this.trailing,
     this.onTap,
+    this.labelColor,
   });
 
   final IconData icon;
   final String label;
   final Widget? trailing;
   final VoidCallback? onTap;
+  final Color? labelColor;
 
   @override
   Widget build(BuildContext context) {
@@ -894,7 +1022,7 @@ class _SettingRow extends StatelessWidget {
               label,
               style: TextStyle(
                 fontSize: 13,
-                color: isDark ? colorScheme.onSurface : null,
+                color: labelColor ?? (isDark ? colorScheme.onSurface : null),
               ),
             ),
             const Spacer(),

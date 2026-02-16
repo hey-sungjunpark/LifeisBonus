@@ -6,10 +6,13 @@ import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:lifeisbonus/screens/premium_connect_screen.dart';
+import 'package:lifeisbonus/services/premium_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
@@ -232,13 +235,20 @@ class _RecordScreenState extends State<RecordScreen> {
 
   Widget _buildOtherTabs() {
     if (_tabIndex == 3) {
-      return _PhotoTab(
-        items: _mediaItems,
-        onUploadTap: _openMediaPicker,
-        onFileSelectTap: _openMediaPicker,
-        loading: _loadingMedia,
-        error: _mediaLoadError,
-        onDeleteTap: _deleteMediaItem,
+      return StreamBuilder<PremiumStatus>(
+        stream: PremiumService.watchStatus(),
+        builder: (context, snapshot) {
+          final isPremium = snapshot.data?.isPremium ?? false;
+          return _PhotoTab(
+            items: _mediaItems,
+            isPremium: isPremium,
+            onUploadTap: () => _handleMediaUploadTap(isPremium),
+            onFileSelectTap: () => _handleMediaUploadTap(isPremium),
+            loading: _loadingMedia,
+            error: _mediaLoadError,
+            onDeleteTap: _deleteMediaItem,
+          );
+        },
       );
     }
     return const _EmptyHint(
@@ -246,6 +256,42 @@ class _RecordScreenState extends State<RecordScreen> {
       title: '준비 중인 탭입니다',
       subtitle: '곧 새로운 기록 기능을 제공할게요',
     );
+  }
+
+  void _handleMediaUploadTap(bool isPremium) {
+    if (!isPremium) {
+      _showPremiumGateDialog();
+      return;
+    }
+    _openMediaPicker();
+  }
+
+  Future<void> _showPremiumGateDialog() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text(
+          '프리미엄 이용이 필요해요',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        content: const Text('사진/동영상 업로드는 프리미엄 이용자만 가능합니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('가입하기'),
+          ),
+        ],
+      ),
+    );
+    if (result == true && mounted) {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const PremiumConnectScreen()),
+      );
+    }
   }
 
   Future<void> _openAddSchool() async {
@@ -553,10 +599,34 @@ class _RecordScreenState extends State<RecordScreen> {
           .collection('media')
           .orderBy('createdAt', descending: true)
           .get();
-      final items = snapshot.docs
-          .map((doc) => _MediaItem.fromFirestore(doc.id, doc.data()))
-          .whereType<_MediaItem>()
-          .toList();
+      final items = <_MediaItem>[];
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final record = _MediaItem.fromFirestore(doc.id, data);
+        if (record == null) {
+          continue;
+        }
+        final url = data['url'] as String?;
+        final storagePath = data['storagePath'] as String?;
+        if ((url == null || url.isEmpty) && storagePath != null) {
+          try {
+            final resolvedUrl =
+                await FirebaseStorage.instance.ref(storagePath).getDownloadURL();
+            await doc.reference.set({
+              'url': resolvedUrl,
+              'status': 'ready',
+              'updatedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+            record.url = resolvedUrl;
+          } on FirebaseException catch (e) {
+            if (e.code == 'object-not-found') {
+              await doc.reference.delete();
+              continue;
+            }
+          } catch (_) {}
+        }
+        items.add(record);
+      }
       if (!mounted) {
         return;
       }
@@ -588,6 +658,10 @@ class _RecordScreenState extends State<RecordScreen> {
       _showSnack('로그인 정보가 없어 업로드할 수 없어요.');
       return;
     }
+    final bucket = Firebase.app().options.storageBucket;
+    debugPrint(
+      '[media-upload] start user=$userDocId isVideo=${item.isVideo} path=${item.file?.path} bucket=$bucket',
+    );
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(userDocId)
@@ -596,7 +670,11 @@ class _RecordScreenState extends State<RecordScreen> {
     final mediaId = docRef.id;
     final extension = _fileExtension(item.file?.path ?? '') ?? (item.isVideo ? 'mp4' : 'jpg');
     final storagePath = 'users/$userDocId/media/$mediaId.$extension';
-    final storageRef = FirebaseStorage.instance.ref(storagePath);
+    final storage = bucket == null
+        ? FirebaseStorage.instance
+        : FirebaseStorage.instanceFor(bucket: bucket);
+    final storageRef = storage.ref(storagePath);
+    debugPrint('[media-upload] storagePath=$storagePath ext=$extension');
 
     Uint8List? thumbBytes;
     if (item.isVideo && item.file != null && !kIsWeb) {
@@ -613,6 +691,7 @@ class _RecordScreenState extends State<RecordScreen> {
     }
 
     try {
+      debugPrint('[media-upload] create media doc');
       await docRef.set({
         'isVideo': item.isVideo,
         'storagePath': storagePath,
@@ -622,6 +701,7 @@ class _RecordScreenState extends State<RecordScreen> {
         'status': 'uploading',
       });
 
+      debugPrint('[media-upload] uploading...');
       final uploadTask = storageRef.putFile(
         File(item.file!.path),
         SettableMetadata(
@@ -636,19 +716,24 @@ class _RecordScreenState extends State<RecordScreen> {
             ..uploadProgress = progress
             ..uploading = snapshot.state == TaskState.running;
         });
+      }, onError: (error) {
+        debugPrint('[media-upload] snapshot error: $error');
       });
 
       await uploadTask;
+      debugPrint('[media-upload] upload complete');
       final url = await storageRef.getDownloadURL();
+      debugPrint('[media-upload] url resolved');
 
       String? thumbUrl;
       if (thumbBytes != null && thumbPath != null) {
-        final thumbRef = FirebaseStorage.instance.ref(thumbPath);
+        final thumbRef = storage.ref(thumbPath);
         await thumbRef.putData(
           thumbBytes,
           SettableMetadata(contentType: 'image/jpeg'),
         );
         thumbUrl = await thumbRef.getDownloadURL();
+        debugPrint('[media-upload] thumb uploaded');
       }
 
       await docRef.update({
@@ -657,6 +742,7 @@ class _RecordScreenState extends State<RecordScreen> {
         'status': 'ready',
         'updatedAt': FieldValue.serverTimestamp(),
       });
+      debugPrint('[media-upload] firestore updated');
 
       setState(() {
         item
@@ -669,6 +755,7 @@ class _RecordScreenState extends State<RecordScreen> {
           ..thumbnailPath = thumbPath;
       });
     } catch (e) {
+      debugPrint('[media-upload] error: $e');
       setState(() {
         item
           ..uploading = false
@@ -6025,12 +6112,14 @@ class _PhotoTab extends StatelessWidget {
     required this.items,
     required this.onUploadTap,
     required this.onFileSelectTap,
+    required this.isPremium,
     required this.loading,
     required this.error,
     required this.onDeleteTap,
   });
 
   final List<_MediaItem> items;
+  final bool isPremium;
   final VoidCallback onUploadTap;
   final VoidCallback onFileSelectTap;
   final bool loading;
@@ -6043,6 +6132,10 @@ class _PhotoTab extends StatelessWidget {
       children: [
         _PhotoHeader(onUploadTap: onUploadTap),
         const SizedBox(height: 16),
+        if (!isPremium) ...[
+          const _PremiumLockedNotice(),
+          const SizedBox(height: 12),
+        ],
         _UploadCard(onTap: onFileSelectTap),
         if (loading)
           const Padding(
@@ -6072,7 +6165,9 @@ class _PhotoTab extends StatelessWidget {
 }
 
 class _PhotoHeader extends StatelessWidget {
-  const _PhotoHeader({required this.onUploadTap});
+  const _PhotoHeader({
+    required this.onUploadTap,
+  });
 
   final VoidCallback onUploadTap;
 
@@ -6172,6 +6267,35 @@ class _UploadCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _PremiumLockedNotice extends StatelessWidget {
+  const _PremiumLockedNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF1F6),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFFFC4D8)),
+      ),
+      child: const Row(
+        children: [
+          Icon(Icons.lock_rounded, size: 18, color: Color(0xFFFF4D88)),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '프리미엄 이용자만 사진/동영상 업로드가 가능해요.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF6B6B6B)),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -12,6 +12,7 @@ import 'google_profile_screen.dart';
 import 'kakao_profile_screen.dart';
 import 'naver_profile_screen.dart';
 import 'premium_connect_screen.dart';
+import 'package:lifeisbonus/services/premium_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -1161,7 +1162,7 @@ class _PeopleCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _HomeCard(
-      title: '같은 추억을 가진 사람들',
+      title: '인연이 될 수 있는 사람들',
       leading: Icons.group_rounded,
       gradient: const LinearGradient(
         colors: [Color(0xFFF3E6FF), Color(0xFFFDE9F6)],
@@ -1203,7 +1204,7 @@ class _PeopleCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 _PeopleRow(
-                  label: '비슷한 목표',
+                  label: '비슷한 계획',
                   value: '${counts.similarPlan}명',
                 ),
               ],
@@ -1213,33 +1214,55 @@ class _PeopleCard extends StatelessWidget {
           SizedBox(
             height: 44,
             width: double.infinity,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => const PremiumConnectScreen(),
+            child: StreamBuilder<PremiumStatus>(
+              stream: PremiumService.watchStatus(),
+              builder: (context, snapshot) {
+                final isPremium = snapshot.data?.isPremium ?? false;
+                return InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () {
+                    if (isPremium) {
+                      final homeState =
+                          context.findAncestorStateOfType<_HomeScreenState>();
+                      if (homeState != null) {
+                        homeState.setState(() {
+                          homeState._currentIndex = 3;
+                        });
+                        return;
+                      }
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => const MessageScreen(),
+                        ),
+                      );
+                      return;
+                    }
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => const PremiumConnectScreen(),
+                      ),
+                    );
+                  },
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFFB356FF), Color(0xFFFF4FA6)],
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        isPremium ? '프리미엄 이용 중 입니다' : '프리미엄으로 연결하기',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
                   ),
                 );
               },
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  gradient: LinearGradient(
-                    colors: [Color(0xFFB356FF), Color(0xFFFF4FA6)],
-                  ),
-                ),
-                child: Center(
-                  child: Text(
-                    '프리미엄으로 연결하기',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                    ),
-                  ),
-                ),
-              ),
             ),
           ),
         ],

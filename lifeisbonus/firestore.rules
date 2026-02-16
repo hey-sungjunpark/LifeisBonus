@@ -31,6 +31,13 @@ service cloud.firestore {
         && request.resource.data.method == 'naver'
         && request.resource.data.birthDate is string
       );
+      allow delete: if (
+        request.auth != null && request.auth.uid == userId
+      ) || (
+        userId.matches('^kakao:.*') && resource.data.method == 'kakao'
+      ) || (
+        userId.matches('^naver:.*') && resource.data.method == 'naver'
+      );
 
       match /blocks/{blockId} {
         allow read, create, update, delete: if true;

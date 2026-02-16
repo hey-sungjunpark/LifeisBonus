@@ -1,7 +1,15 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+
+List<_CountryOption>? _countryOptionsCache;
+final Map<String, List<String>> _cityOptionsCache = {};
+List<Map<String, dynamic>>? _countriesNowRawCache;
+final Map<String, String> _cityKoNameCache = {};
 
 class PlanScreen extends StatefulWidget {
   const PlanScreen({super.key});
@@ -318,6 +326,8 @@ class _PlanScreenState extends State<PlanScreen> {
         'endDate': record.endDate,
         'title': record.title,
         'location': record.location,
+        'country': record.country,
+        'city': record.city,
         'description': record.description,
         'highlight': record.highlight,
         'matchKey': matchKey,
@@ -692,6 +702,8 @@ class _PlanRecord {
     required this.title,
     required this.location,
     required this.description,
+    this.country,
+    this.city,
     required this.highlight,
   });
 
@@ -702,6 +714,8 @@ class _PlanRecord {
   final String title;
   final String location;
   final String description;
+  final String? country;
+  final String? city;
   final bool highlight;
 
   String get yearLabel =>
@@ -740,6 +754,8 @@ class _PlanRecord {
     String? title,
     String? location,
     String? description,
+    String? country,
+    String? city,
     bool? highlight,
   }) {
     return _PlanRecord(
@@ -750,6 +766,8 @@ class _PlanRecord {
       title: title ?? this.title,
       location: location ?? this.location,
       description: description ?? this.description,
+      country: country ?? this.country,
+      city: city ?? this.city,
       highlight: highlight ?? this.highlight,
     );
   }
@@ -759,6 +777,8 @@ class _PlanRecord {
     final title = data['title'] as String?;
     final location = data['location'] as String?;
     final description = data['description'] as String?;
+    final country = data['country'] as String?;
+    final city = data['city'] as String?;
     DateTime? targetDate;
     final rawDate = data['targetDate'];
     final rawStart = data['startDate'];
@@ -796,9 +816,23 @@ class _PlanRecord {
       title: title,
       location: location,
       description: description,
+      country: country,
+      city: city,
       highlight: data['highlight'] == true,
     );
   }
+}
+
+class _CountryOption {
+  const _CountryOption({
+    required this.apiName,
+    required this.displayName,
+    required this.regionGroup,
+  });
+
+  final String apiName;
+  final String displayName;
+  final String regionGroup;
 }
 
 class _AddPlanSheet extends StatefulWidget {
@@ -811,10 +845,36 @@ class _AddPlanSheet extends StatefulWidget {
 }
 
 class _AddPlanSheetState extends State<_AddPlanSheet> {
+  static const List<String> _popularCountryApiOrder = <String>[
+    'South Korea',
+    'Japan',
+    'United States',
+    'China',
+    'Thailand',
+    'Vietnam',
+    'Philippines',
+    'India',
+    'France',
+    'Spain',
+    'Italy',
+  ];
+  static const List<String> _regionOrder = <String>[
+    'Asia',
+    'Europe',
+    'South America',
+    'Africa',
+  ];
   final _titleController = TextEditingController();
   final _locationController = TextEditingController();
   final _descriptionController = TextEditingController();
   String _category = '여행';
+  String? _selectedCountryApi;
+  String? _selectedCountryDisplay;
+  String? _selectedCity;
+  List<_CountryOption> _countryOptions = [];
+  List<String> _cityOptions = [];
+  bool _loadingCountries = false;
+  bool _loadingCities = false;
   DateTime _startDate = DateTime.now();
   DateTime _endDate = DateTime.now();
   bool _highlight = false;
@@ -831,6 +891,19 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
       _startDate = record.startDate;
       _endDate = record.endDate;
       _highlight = record.highlight;
+      _selectedCountryDisplay = record.country;
+      _selectedCity = record.city;
+      if ((_selectedCountryDisplay == null || _selectedCountryDisplay!.isEmpty) &&
+          record.location.contains(' / ')) {
+        final split = record.location.split(' / ');
+        if (split.length >= 2) {
+          _selectedCountryDisplay = split.first.trim();
+          _selectedCity = split.sublist(1).join(' / ').trim();
+        }
+      }
+    }
+    if (_category == '여행') {
+      _initTravelOptions();
     }
   }
 
@@ -889,7 +962,16 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
                         }
                         setState(() {
                           _category = value;
+                          if (_category != '여행') {
+                            _selectedCountryApi = null;
+                            _selectedCountryDisplay = null;
+                            _selectedCity = null;
+                            _cityOptions = [];
+                          }
                         });
+                        if (value == '여행') {
+                          _initTravelOptions();
+                        }
                       },
                       decoration: _fieldDecoration('카테고리 선택'),
                     ),
@@ -943,12 +1025,81 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
                   ),
                   const SizedBox(height: 12),
                   _PlanSection(
-                    title: '장소',
-                    child: TextField(
-                      controller: _locationController,
-                      decoration: _fieldDecoration('예: 일본 교토'),
-                    ),
+                    title: _category == '여행' ? '장소(나라)' : '장소',
+                    child: _category == '여행'
+                        ? DropdownButtonFormField<String>(
+                            value: _selectedCountryApi,
+                            isExpanded: true,
+                            items: _buildCountryDropdownItems(),
+                            onChanged: _loadingCountries
+                                ? null
+                                : (value) {
+                                    if (value == null) {
+                                      return;
+                                    }
+                                    final selected = _countryOptions.firstWhere(
+                                      (c) => c.apiName == value,
+                                      orElse: () => _CountryOption(
+                                        apiName: value,
+                                        displayName: value,
+                                        regionGroup: 'Other',
+                                      ),
+                                    );
+                                    setState(() {
+                                      _selectedCountryApi = selected.apiName;
+                                      _selectedCountryDisplay =
+                                          selected.displayName;
+                                      _selectedCity = null;
+                                      _cityOptions = [];
+                                    });
+                                    _loadCitiesForCountry(selected.apiName);
+                                  },
+                            decoration: _fieldDecoration(
+                              _loadingCountries
+                                  ? '나라 목록 불러오는 중...'
+                                  : '예: 한국',
+                            ),
+                          )
+                        : TextField(
+                            controller: _locationController,
+                            decoration: _fieldDecoration('예: 일본 교토'),
+                          ),
                   ),
+                  if (_category == '여행') ...[
+                    const SizedBox(height: 12),
+                    _PlanSection(
+                      title: '장소(도시)',
+                      child: DropdownButtonFormField<String>(
+                        value: _selectedCity,
+                        isExpanded: true,
+                        items: _cityOptions
+                            .map(
+                              (city) => DropdownMenuItem<String>(
+                                value: city,
+                                child: Text(city),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (_selectedCountryApi == null || _loadingCities)
+                            ? null
+                            : (value) {
+                                if (value == null) {
+                                  return;
+                                }
+                                setState(() {
+                                  _selectedCity = value;
+                                });
+                              },
+                        decoration: _fieldDecoration(
+                          _selectedCountryApi == null
+                              ? '먼저 나라를 선택해주세요'
+                              : (_loadingCities
+                                  ? '도시 목록 불러오는 중...'
+                                  : '예: 도쿄'),
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   _PlanSection(
                     title: '설명',
@@ -975,22 +1126,48 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
                   ),
                   const SizedBox(height: 16),
                   SizedBox(
-                    width: double.infinity,
                     height: 48,
-                    child: ElevatedButton(
-                      onPressed: _save,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF3A8DFF),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: _save,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF3A8DFF),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              elevation: 0,
+                            ),
+                            child: const Text(
+                              '저장하기',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
                         ),
-                        elevation: 0,
-                      ),
-                      child: const Text(
-                        '저장하기',
-                        style:
-                            TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
-                      ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: Color(0xFFE5E7EB)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: const Text(
+                              '취소',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -1028,13 +1205,35 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
   }
 
   void _save() {
-    if (_titleController.text.trim().isEmpty ||
-        _locationController.text.trim().isEmpty ||
-        _descriptionController.text.trim().isEmpty) {
+    final title = _titleController.text.trim();
+    final description = _descriptionController.text.trim();
+    if (title.isEmpty || description.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('제목, 장소, 설명을 입력해주세요.')),
+        const SnackBar(content: Text('제목과 설명을 입력해주세요.')),
       );
       return;
+    }
+    String location;
+    String? country;
+    String? city;
+    if (_category == '여행') {
+      if ((_selectedCountryDisplay ?? '').isEmpty || (_selectedCity ?? '').isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('여행 카테고리는 나라와 도시를 선택해주세요.')),
+        );
+        return;
+      }
+      country = _selectedCountryDisplay!.trim();
+      city = _selectedCity!.trim();
+      location = '$country / $city';
+    } else {
+      location = _locationController.text.trim();
+      if (location.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('장소를 입력해주세요.')),
+        );
+        return;
+      }
     }
     Navigator.of(context).pop(
       _PlanRecord(
@@ -1042,12 +1241,439 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
         category: _category,
         startDate: _startDate,
         endDate: _endDate,
-        title: _titleController.text.trim(),
-        location: _locationController.text.trim(),
-        description: _descriptionController.text.trim(),
+        title: title,
+        location: location,
+        description: description,
+        country: country,
+        city: city,
         highlight: _highlight,
       ),
     );
+  }
+
+  Future<void> _initTravelOptions() async {
+    setState(() {
+      _loadingCountries = true;
+    });
+    try {
+      if (_countryOptionsCache == null) {
+        _countryOptionsCache = await _fetchCountries();
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _countryOptions = _countryOptionsCache!;
+      });
+      if (_selectedCountryApi == null) {
+        final korea = _countryOptions.firstWhere(
+          (c) =>
+              c.apiName == 'South Korea' ||
+              c.apiName == 'Korea, Republic of' ||
+              c.displayName == '한국',
+          orElse: () => _countryOptions.isNotEmpty
+              ? _countryOptions.first
+              : const _CountryOption(
+                  apiName: '',
+                  displayName: '',
+                  regionGroup: 'Other',
+                ),
+        );
+        if (korea.apiName.isNotEmpty) {
+          _selectedCountryApi = korea.apiName;
+          _selectedCountryDisplay = korea.displayName;
+        }
+      }
+      if (_selectedCountryApi == null && _selectedCountryDisplay != null) {
+        final hit = _countryOptions.firstWhere(
+          (c) =>
+              c.displayName == _selectedCountryDisplay ||
+              c.apiName == _selectedCountryDisplay,
+          orElse: () => const _CountryOption(
+            apiName: '',
+            displayName: '',
+            regionGroup: 'Other',
+          ),
+        );
+        if (hit.apiName.isNotEmpty) {
+          _selectedCountryApi = hit.apiName;
+          _selectedCountryDisplay = hit.displayName;
+        }
+      }
+      if (_selectedCountryApi != null) {
+        await _loadCitiesForCountry(_selectedCountryApi!);
+      }
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('국가 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요.')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingCountries = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadCitiesForCountry(String countryApiName) async {
+    setState(() {
+      _loadingCities = true;
+    });
+    try {
+      if (_cityOptionsCache[countryApiName] == null) {
+        _cityOptionsCache[countryApiName] = await _fetchCities(countryApiName);
+      }
+      if (!mounted) {
+        return;
+      }
+      final cities = _cityOptionsCache[countryApiName]!;
+      final localizedCities = await _translateCitiesToKorean(cities);
+      setState(() {
+        _cityOptions = localizedCities;
+        if (_selectedCity != null && !_cityOptions.contains(_selectedCity)) {
+          _selectedCity = null;
+        }
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _cityOptions = [];
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('도시 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요.')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingCities = false;
+        });
+      }
+    }
+  }
+
+  Future<List<_CountryOption>> _fetchCountries() async {
+    final uri = Uri.parse(
+      'https://restcountries.com/v3.1/all?fields=name,translations,region,subregion',
+    );
+    final response = await http.get(uri);
+    if (response.statusCode != 200) {
+      throw Exception('country-api-failed');
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! List) {
+      throw Exception('country-api-invalid');
+    }
+    final options = <_CountryOption>[];
+    for (final item in decoded) {
+      if (item is! Map) {
+        continue;
+      }
+      final name = item['name'];
+      if (name is! Map) {
+        continue;
+      }
+      final common = (name['common'] as String?)?.trim();
+      if (common == null || common.isEmpty) {
+        continue;
+      }
+      final translations = item['translations'];
+      final region = (item['region'] as String?)?.trim() ?? '';
+      final subregion = (item['subregion'] as String?)?.trim() ?? '';
+      String displayName = common;
+      if (translations is Map && translations['kor'] is Map) {
+        final kor = translations['kor'] as Map;
+        final korName = (kor['common'] as String?)?.trim();
+        if (korName != null && korName.isNotEmpty) {
+          displayName = korName;
+        }
+      }
+      if (common == 'South Korea' ||
+          common == 'Korea, Republic of' ||
+          displayName == '대한민국') {
+        displayName = '한국';
+      }
+      options.add(
+        _CountryOption(
+          apiName: common,
+          displayName: displayName,
+          regionGroup: _resolveRegionGroup(region, subregion),
+        ),
+      );
+    }
+    options.sort((a, b) => a.displayName.compareTo(b.displayName));
+    return options;
+  }
+
+  String _resolveRegionGroup(String region, String subregion) {
+    if (subregion.toLowerCase() == 'south america') {
+      return 'South America';
+    }
+    switch (region.toLowerCase()) {
+      case 'asia':
+        return 'Asia';
+      case 'europe':
+        return 'Europe';
+      case 'africa':
+        return 'Africa';
+      case 'americas':
+        return 'North America';
+      case 'oceania':
+        return 'Oceania';
+      default:
+        return 'Other';
+    }
+  }
+
+  String _regionLabel(String key) {
+    switch (key) {
+      case 'Asia':
+        return '아시아';
+      case 'Europe':
+        return '유럽';
+      case 'South America':
+        return '남미';
+      case 'Africa':
+        return '아프리카';
+      case 'North America':
+        return '북미';
+      case 'Oceania':
+        return '오세아니아';
+      default:
+        return '기타';
+    }
+  }
+
+  List<DropdownMenuItem<String>> _buildCountryDropdownItems() {
+    final items = <DropdownMenuItem<String>>[];
+    if (_countryOptions.isEmpty) {
+      return items;
+    }
+
+    final byApi = <String, _CountryOption>{
+      for (final c in _countryOptions) c.apiName: c,
+    };
+    final seen = <String>{};
+
+    void addHeader(String label, String keySuffix) {
+      items.add(
+        DropdownMenuItem<String>(
+          enabled: false,
+          value: '__header__$keySuffix',
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF7C6CFF),
+            ),
+          ),
+        ),
+      );
+    }
+
+    void addCountryItems(Iterable<_CountryOption> countries) {
+      for (final country in countries) {
+        if (seen.contains(country.apiName)) {
+          continue;
+        }
+        seen.add(country.apiName);
+        items.add(
+          DropdownMenuItem<String>(
+            value: country.apiName,
+            child: Text(country.displayName),
+          ),
+        );
+      }
+    }
+
+    addHeader('인기 많은 나라', 'popular');
+    addCountryItems(
+      _popularCountryApiOrder
+          .map((api) => byApi[api])
+          .whereType<_CountryOption>(),
+    );
+
+    for (final region in _regionOrder) {
+      final regionCountries = _countryOptions
+          .where((c) => c.regionGroup == region && !seen.contains(c.apiName))
+          .toList()
+        ..sort((a, b) => a.displayName.compareTo(b.displayName));
+      if (regionCountries.isEmpty) {
+        continue;
+      }
+      addHeader(_regionLabel(region), region);
+      addCountryItems(regionCountries);
+    }
+
+    final rest = _countryOptions
+        .where((c) => !seen.contains(c.apiName))
+        .toList()
+      ..sort((a, b) => a.displayName.compareTo(b.displayName));
+    if (rest.isNotEmpty) {
+      addHeader(_regionLabel('Other'), 'other');
+      addCountryItems(rest);
+    }
+    return items;
+  }
+
+  Future<List<String>> _fetchCities(String countryApiName) async {
+    String normalize(String value) =>
+        value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+    Future<List<String>> fromPost(String countryName) async {
+      final uri = Uri.parse('https://countriesnow.space/api/v0.1/countries/cities');
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'country': countryName}),
+      );
+      if (response.statusCode != 200) {
+        return [];
+      }
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map || decoded['data'] is! List) {
+        return [];
+      }
+      return (decoded['data'] as List)
+          .whereType<String>()
+          .map((city) => city.trim())
+          .where((city) => city.isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort();
+    }
+
+    var cities = await fromPost(countryApiName);
+    if (cities.isNotEmpty) {
+      return cities;
+    }
+
+    if (countryApiName == 'South Korea' || countryApiName == 'Korea, Republic of') {
+      const koreaAliases = <String>[
+        'Korea South',
+        'South Korea',
+        'Korea, Republic of',
+        'Republic of Korea',
+        'Korea Republic of',
+      ];
+      for (final alias in koreaAliases) {
+        cities = await fromPost(alias);
+        if (cities.isNotEmpty) {
+          return cities;
+        }
+      }
+    }
+
+    final rawList = await _fetchCountriesNowRaw();
+    final hit = rawList.cast<Map>().firstWhere(
+      (item) {
+        final country = (item['country'] as String?)?.trim() ?? '';
+        if (country.isEmpty) {
+          return false;
+        }
+        if (country.toLowerCase() == countryApiName.toLowerCase()) {
+          return true;
+        }
+        if (normalize(country) == normalize(countryApiName)) {
+          return true;
+        }
+        if ((countryApiName == 'South Korea' ||
+                countryApiName == 'Korea, Republic of') &&
+            (normalize(country) == normalize('korea south') ||
+                normalize(country) == normalize('south korea') ||
+                normalize(country) == normalize('korea republic of') ||
+                normalize(country) == normalize('republic of korea'))) {
+          return true;
+        }
+        return false;
+      },
+      orElse: () => {},
+    );
+    if (hit.isNotEmpty && hit['cities'] is List) {
+      return (hit['cities'] as List)
+          .whereType<String>()
+          .map((city) => city.trim())
+          .where((city) => city.isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort();
+    }
+    return [];
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchCountriesNowRaw() async {
+    if (_countriesNowRawCache != null) {
+      return _countriesNowRawCache!;
+    }
+    final uri = Uri.parse('https://countriesnow.space/api/v0.1/countries');
+    final response = await http.get(uri);
+    if (response.statusCode != 200) {
+      throw Exception('countriesnow-api-failed');
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map || decoded['data'] is! List) {
+      throw Exception('countriesnow-api-invalid');
+    }
+    _countriesNowRawCache =
+        (decoded['data'] as List).whereType<Map<String, dynamic>>().toList();
+    return _countriesNowRawCache!;
+  }
+
+  Future<List<String>> _translateCitiesToKorean(List<String> cities) async {
+    final translated = await Future.wait(
+      cities.map((city) => _translateCityToKorean(city)),
+    );
+    return translated.toSet().toList()..sort();
+  }
+
+  Future<String> _translateCityToKorean(String city) async {
+    final trimmed = city.trim();
+    if (trimmed.isEmpty) {
+      return city;
+    }
+    if (RegExp(r'[가-힣]').hasMatch(trimmed)) {
+      return trimmed;
+    }
+    final cached = _cityKoNameCache[trimmed];
+    if (cached != null && cached.isNotEmpty) {
+      return cached;
+    }
+
+    try {
+      final uri = Uri.parse(
+        'https://translate.googleapis.com/translate_a/single'
+        '?client=gtx&sl=auto&tl=ko&dt=t&q=${Uri.encodeQueryComponent(trimmed)}',
+      );
+      final response = await http.get(uri);
+      if (response.statusCode != 200) {
+        _cityKoNameCache[trimmed] = trimmed;
+        return trimmed;
+      }
+      final decoded = jsonDecode(response.body);
+      if (decoded is List &&
+          decoded.isNotEmpty &&
+          decoded[0] is List &&
+          (decoded[0] as List).isNotEmpty &&
+          (decoded[0] as List)[0] is List &&
+          ((decoded[0] as List)[0] as List).isNotEmpty) {
+        final translated = (((decoded[0] as List)[0] as List)[0] as String?)
+                ?.trim() ??
+            trimmed;
+        _cityKoNameCache[trimmed] = translated.isEmpty ? trimmed : translated;
+        return _cityKoNameCache[trimmed]!;
+      }
+    } catch (_) {
+      // Fallback to original city name when translation API fails.
+    }
+
+    _cityKoNameCache[trimmed] = trimmed;
+    return trimmed;
   }
 
   String _formatDate(DateTime date) {
