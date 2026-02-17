@@ -8,6 +8,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/intro_screen.dart';
 import 'screens/login_screen.dart';
 import 'firebase_options.dart';
+import 'utils/plan_city_alias_store.dart';
+import 'utils/institution_alias_store.dart';
+import 'utils/health_activity_alias_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,6 +22,9 @@ Future<void> main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  await PlanCityAliasStore.instance.load();
+  await InstitutionAliasStore.instance.load();
+  await HealthActivityAliasStore.instance.load();
   await FirebaseFirestore.instance.clearPersistence();
   FirebaseFirestore.instance.settings = const Settings(persistenceEnabled: false);
   runApp(const LifeIsBonusApp());

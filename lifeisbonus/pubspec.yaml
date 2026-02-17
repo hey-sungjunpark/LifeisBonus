@@ -80,6 +80,12 @@ flutter:
     - assets/logos/google-logo.png
     - assets/logos/kakao-logo.png
     - assets/logos/naver-logo.png
+    - assets/json/plan_city_aliases.json
+    - assets/json/institutions_companies_kr.json
+    - assets/json/institutions_public_kr.json
+    - assets/json/institutions_education_kr.json
+    - assets/json/institution_aliases.json
+    - assets/json/health_activity_aliases.json
 
 flutter_launcher_icons:
   android: true

@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:lifeisbonus/screens/premium_connect_screen.dart';
+import 'package:lifeisbonus/services/institution_search_service.dart';
 import 'package:lifeisbonus/services/premium_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -118,9 +119,7 @@ class _RecordScreenState extends State<RecordScreen> {
           ),
           const SizedBox(height: 16),
           if (_tabIndex == 0) ...[
-            _SchoolHeader(
-              onAdd: _openAddSchool,
-            ),
+            _SchoolHeader(onAdd: _openAddSchool),
             const SizedBox(height: 12),
             if (_loadingSchools)
               const _EmptyHint(
@@ -288,9 +287,9 @@ class _RecordScreenState extends State<RecordScreen> {
       ),
     );
     if (result == true && mounted) {
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const PremiumConnectScreen()),
-      );
+      Navigator.of(
+        context,
+      ).push(MaterialPageRoute(builder: (_) => const PremiumConnectScreen()));
     }
   }
 
@@ -452,8 +451,7 @@ class _RecordScreenState extends State<RecordScreen> {
       return;
     }
     setState(() {
-      final index =
-          _neighborhoods.indexWhere((item) => item.id == saved.id);
+      final index = _neighborhoods.indexWhere((item) => item.id == saved.id);
       if (index >= 0) {
         _neighborhoods[index] = saved;
       }
@@ -610,8 +608,9 @@ class _RecordScreenState extends State<RecordScreen> {
         final storagePath = data['storagePath'] as String?;
         if ((url == null || url.isEmpty) && storagePath != null) {
           try {
-            final resolvedUrl =
-                await FirebaseStorage.instance.ref(storagePath).getDownloadURL();
+            final resolvedUrl = await FirebaseStorage.instance
+                .ref(storagePath)
+                .getDownloadURL();
             await doc.reference.set({
               'url': resolvedUrl,
               'status': 'ready',
@@ -668,7 +667,8 @@ class _RecordScreenState extends State<RecordScreen> {
         .collection('media')
         .doc();
     final mediaId = docRef.id;
-    final extension = _fileExtension(item.file?.path ?? '') ?? (item.isVideo ? 'mp4' : 'jpg');
+    final extension =
+        _fileExtension(item.file?.path ?? '') ?? (item.isVideo ? 'mp4' : 'jpg');
     final storagePath = 'users/$userDocId/media/$mediaId.$extension';
     final storage = bucket == null
         ? FirebaseStorage.instance
@@ -709,16 +709,19 @@ class _RecordScreenState extends State<RecordScreen> {
         ),
       );
 
-      uploadTask.snapshotEvents.listen((snapshot) {
-        final progress = snapshot.bytesTransferred / snapshot.totalBytes;
-        setState(() {
-          item
-            ..uploadProgress = progress
-            ..uploading = snapshot.state == TaskState.running;
-        });
-      }, onError: (error) {
-        debugPrint('[media-upload] snapshot error: $error');
-      });
+      uploadTask.snapshotEvents.listen(
+        (snapshot) {
+          final progress = snapshot.bytesTransferred / snapshot.totalBytes;
+          setState(() {
+            item
+              ..uploadProgress = progress
+              ..uploading = snapshot.state == TaskState.running;
+          });
+        },
+        onError: (error) {
+          debugPrint('[media-upload] snapshot error: $error');
+        },
+      );
 
       await uploadTask;
       debugPrint('[media-upload] upload complete');
@@ -826,10 +829,8 @@ class _RecordScreenState extends State<RecordScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
-      builder: (context) => _AddSchoolSheet(
-        initialRecord: record,
-        onSave: _saveSchoolFromSheet,
-      ),
+      builder: (context) =>
+          _AddSchoolSheet(initialRecord: record, onSave: _saveSchoolFromSheet),
     );
     if (updated == null) {
       return;
@@ -991,7 +992,8 @@ class _RecordScreenState extends State<RecordScreen> {
                 (existingKeys.length != computedSet.length ||
                     !existingKeys.containsAll(computedSet))) ||
             (data['schoolKey'] != null && data['schoolKey'] != schoolKey);
-        if (needsUpdate || (data['schoolKey'] == null && schoolKey.isNotEmpty)) {
+        if (needsUpdate ||
+            (data['schoolKey'] == null && schoolKey.isNotEmpty)) {
           await doc.reference.set({
             'schoolKey': schoolKey,
             'matchKeys': computedKeys,
@@ -1018,7 +1020,8 @@ class _RecordScreenState extends State<RecordScreen> {
         return;
       }
       setState(() {
-        _schoolLoadError = '학교 기록을 불러오지 못했어요. (${e.toString().replaceAll('Exception: ', '')})';
+        _schoolLoadError =
+            '학교 기록을 불러오지 못했어요. (${e.toString().replaceAll('Exception: ', '')})';
       });
     } finally {
       if (mounted) {
@@ -1093,10 +1096,8 @@ class _RecordScreenState extends State<RecordScreen> {
             .collection('users')
             .doc(userDocId)
             .collection('schools')
-            .add({
-          ...data,
-          'createdAt': FieldValue.serverTimestamp(),
-        }).timeout(const Duration(seconds: 8));
+            .add({...data, 'createdAt': FieldValue.serverTimestamp()})
+            .timeout(const Duration(seconds: 8));
         return record.copyWith(id: docRef.id);
       }
       await FirebaseFirestore.instance
@@ -1114,7 +1115,9 @@ class _RecordScreenState extends State<RecordScreen> {
       _showSnack('저장에 실패했어요. (${e.code})');
       return null;
     } catch (e) {
-      _showSnack('학교 저장에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})');
+      _showSnack(
+        '학교 저장에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})',
+      );
       return null;
     }
   }
@@ -1190,7 +1193,8 @@ class _RecordScreenState extends State<RecordScreen> {
   }
 
   Future<_NeighborhoodRecord?> _persistNeighborhood(
-      _NeighborhoodRecord record) async {
+    _NeighborhoodRecord record,
+  ) async {
     try {
       final userDocId = await _resolveUserDocId();
       if (userDocId == null) {
@@ -1218,10 +1222,7 @@ class _RecordScreenState extends State<RecordScreen> {
             .collection('users')
             .doc(userDocId)
             .collection('neighborhoods')
-            .add({
-          ...data,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+            .add({...data, 'createdAt': FieldValue.serverTimestamp()});
         return record.copyWith(id: docRef.id);
       }
       await FirebaseFirestore.instance
@@ -1232,7 +1233,9 @@ class _RecordScreenState extends State<RecordScreen> {
           .set(data, SetOptions(merge: true));
       return record;
     } catch (e) {
-      _showSnack('동네 저장에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})');
+      _showSnack(
+        '동네 저장에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})',
+      );
       return null;
     }
   }
@@ -1265,8 +1268,9 @@ class _RecordScreenState extends State<RecordScreen> {
         }
         final matchKeys = _buildMemoryMatchKeys(record);
         final needsUpdate =
-            (data['matchKeys'] is! List || (data['matchKeys'] as List).isEmpty) &&
-                matchKeys.isNotEmpty;
+            (data['matchKeys'] is! List ||
+                (data['matchKeys'] as List).isEmpty) &&
+            matchKeys.isNotEmpty;
         if (needsUpdate || data['ownerId'] == null) {
           await doc.reference.set({
             'matchKeys': matchKeys,
@@ -1333,10 +1337,7 @@ class _RecordScreenState extends State<RecordScreen> {
             .collection('users')
             .doc(userDocId)
             .collection('memories')
-            .add({
-          ...data,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+            .add({...data, 'createdAt': FieldValue.serverTimestamp()});
         return record.copyWith(id: docRef.id);
       }
       await FirebaseFirestore.instance
@@ -1347,7 +1348,9 @@ class _RecordScreenState extends State<RecordScreen> {
           .set(data, SetOptions(merge: true));
       return record;
     } catch (e) {
-      _showSnack('추억 저장에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})');
+      _showSnack(
+        '추억 저장에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})',
+      );
       return null;
     }
   }
@@ -1380,16 +1383,7 @@ class _RecordScreenState extends State<RecordScreen> {
     if (normalized.isEmpty) {
       return normalized;
     }
-    const suffixes = [
-      '특별자치시',
-      '특별자치도',
-      '광역시',
-      '특별시',
-      '자치시',
-      '자치도',
-      '도',
-      '시',
-    ];
+    const suffixes = ['특별자치시', '특별자치도', '광역시', '특별시', '자치시', '자치도', '도', '시'];
     for (final suffix in suffixes) {
       if (normalized.endsWith(suffix)) {
         normalized = normalized.substring(0, normalized.length - suffix.length);
@@ -1474,10 +1468,7 @@ class _RecordScreenState extends State<RecordScreen> {
     return parts.join('|');
   }
 
-  List<String> _buildSchoolMatchKeys(
-    _SchoolRecord record,
-    String schoolKey,
-  ) {
+  List<String> _buildSchoolMatchKeys(_SchoolRecord record, String schoolKey) {
     final keys = <String>[];
     if (record.level == _SchoolLevel.kindergarten) {
       final year = record.kindergartenGradYear;
@@ -1530,7 +1521,9 @@ class _RecordScreenState extends State<RecordScreen> {
     } else if (record.year != null &&
         record.classNumber != null &&
         record.classNumber != '모름') {
-      keys.add('$schoolKey|${record.year}|${record.grade}|${record.classNumber}');
+      keys.add(
+        '$schoolKey|${record.year}|${record.grade}|${record.classNumber}',
+      );
     }
     return keys;
   }
@@ -1548,9 +1541,9 @@ class _RecordScreenState extends State<RecordScreen> {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _showDuplicateDialog() async {
@@ -1621,7 +1614,10 @@ class _RecordScreenState extends State<RecordScreen> {
   void _initMemorySections() {
     final grouped = _groupMemoriesByMonth(_memories);
     for (final key in grouped.keys) {
-      _memorySectionExpanded.putIfAbsent(key, () => _isLatestSection(key, grouped.keys));
+      _memorySectionExpanded.putIfAbsent(
+        key,
+        () => _isLatestSection(key, grouped.keys),
+      );
     }
   }
 
@@ -1629,8 +1625,8 @@ class _RecordScreenState extends State<RecordScreen> {
     final filtered = _memoryYearFilter == null
         ? _memories
         : _memories
-            .where((record) => record.date.year == _memoryYearFilter)
-            .toList();
+              .where((record) => record.date.year == _memoryYearFilter)
+              .toList();
     final grouped = _groupMemoriesByMonth(filtered);
     final keys = grouped.keys.toList();
     return keys
@@ -1641,7 +1637,8 @@ class _RecordScreenState extends State<RecordScreen> {
             expanded: _memorySectionExpanded[key] ?? false,
             onToggle: () {
               setState(() {
-                _memorySectionExpanded[key] = !(_memorySectionExpanded[key] ?? false);
+                _memorySectionExpanded[key] =
+                    !(_memorySectionExpanded[key] ?? false);
               });
             },
             children: grouped[key]!
@@ -1662,7 +1659,8 @@ class _RecordScreenState extends State<RecordScreen> {
   }
 
   Map<String, List<_MemoryRecord>> _groupMemoriesByMonth(
-      List<_MemoryRecord> records) {
+    List<_MemoryRecord> records,
+  ) {
     final Map<String, List<_MemoryRecord>> grouped = {};
     for (final record in records) {
       final key = '${record.date.year}년 ${record.date.month}월';
@@ -1680,9 +1678,7 @@ class _RecordScreenState extends State<RecordScreen> {
 }
 
 class _SchoolHeader extends StatelessWidget {
-  const _SchoolHeader({
-    required this.onAdd,
-  });
+  const _SchoolHeader({required this.onAdd});
 
   final VoidCallback onAdd;
 
@@ -1705,10 +1701,7 @@ class _SchoolHeader extends StatelessWidget {
         children: [
           const Icon(Icons.school_rounded, color: Color(0xFF3A8DFF)),
           const SizedBox(width: 8),
-          const Text(
-            '다닌 학교들',
-            style: TextStyle(fontWeight: FontWeight.w600),
-          ),
+          const Text('다닌 학교들', style: TextStyle(fontWeight: FontWeight.w600)),
           const Spacer(),
           GestureDetector(
             onTap: onAdd,
@@ -1764,10 +1757,7 @@ class _NeighborhoodHeader extends StatelessWidget {
         children: [
           const Icon(Icons.home_rounded, color: Color(0xFF22C55E)),
           const SizedBox(width: 8),
-          const Text(
-            '살았던 동네들',
-            style: TextStyle(fontWeight: FontWeight.w600),
-          ),
+          const Text('살았던 동네들', style: TextStyle(fontWeight: FontWeight.w600)),
           const Spacer(),
           GestureDetector(
             onTap: onAdd,
@@ -1838,10 +1828,7 @@ class _MemoryHeader extends StatelessWidget {
         children: [
           const Icon(Icons.calendar_month_rounded, color: Color(0xFF7C3AED)),
           const SizedBox(width: 8),
-          const Text(
-            '추억 일기',
-            style: TextStyle(fontWeight: FontWeight.w600),
-          ),
+          const Text('추억 일기', style: TextStyle(fontWeight: FontWeight.w600)),
           const Spacer(),
           GestureDetector(
             onTap: onAdd,
@@ -1944,25 +1931,32 @@ class _MemoryCard extends StatelessWidget {
                 const SizedBox(height: 10),
                 Text(
                   record.content,
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF3E3E3E)),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF3E3E3E),
+                  ),
                 ),
                 if (record.timeCapsule != null &&
                     record.timeCapsule!.trim().isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Text(
                     '타임캡슐: ${record.timeCapsule!}',
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF7C3AED)),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF7C3AED),
+                    ),
                   ),
                 ],
-                if (record.song != null || record.smell != null || record.weather != null)
-                  ...[
-                    const SizedBox(height: 6),
-                    _MemorySenseRow(
-                      song: record.song,
-                      smell: record.smell,
-                      weather: record.weather,
-                    ),
-                  ],
+                if (record.song != null ||
+                    record.smell != null ||
+                    record.weather != null) ...[
+                  const SizedBox(height: 6),
+                  _MemorySenseRow(
+                    song: record.song,
+                    smell: record.smell,
+                    weather: record.weather,
+                  ),
+                ],
               ],
             ),
           ),
@@ -1976,14 +1970,8 @@ class _MemoryCard extends StatelessWidget {
               }
             },
             itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: 'edit',
-                child: Text('수정'),
-              ),
-              PopupMenuItem(
-                value: 'delete',
-                child: Text('삭제'),
-              ),
+              PopupMenuItem(value: 'edit', child: Text('수정')),
+              PopupMenuItem(value: 'delete', child: Text('삭제')),
             ],
           ),
         ],
@@ -2038,8 +2026,11 @@ class _MemorySection extends StatelessWidget {
                       color: const Color(0xFFF1E9FF),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const Icon(Icons.calendar_month_rounded,
-                        color: Color(0xFF7C3AED), size: 18),
+                    child: const Icon(
+                      Icons.calendar_month_rounded,
+                      color: Color(0xFF7C3AED),
+                      size: 18,
+                    ),
                   ),
                   const SizedBox(width: 10),
                   Text(
@@ -2132,7 +2123,9 @@ class _MemoryYearFilter extends StatelessWidget {
             color: selected ? const Color(0xFF7C3AED) : Colors.white,
             borderRadius: BorderRadius.circular(18),
             border: Border.all(
-              color: selected ? const Color(0xFF7C3AED) : const Color(0xFFE7E2F5),
+              color: selected
+                  ? const Color(0xFF7C3AED)
+                  : const Color(0xFFE7E2F5),
             ),
             boxShadow: selected
                 ? [
@@ -2164,7 +2157,8 @@ class _NeighborhoodCardState extends State<_NeighborhoodCard> {
   @override
   Widget build(BuildContext context) {
     final record = widget.record;
-    final hasExtra = (record.favoritePlace != null &&
+    final hasExtra =
+        (record.favoritePlace != null &&
             record.favoritePlace!.trim().isNotEmpty) ||
         (record.nickname != null && record.nickname!.trim().isNotEmpty) ||
         (record.bestFriend != null && record.bestFriend!.trim().isNotEmpty) ||
@@ -2252,7 +2246,10 @@ class _NeighborhoodCardState extends State<_NeighborhoodCard> {
                     const SizedBox(height: 4),
                     Text(
                       '장소: ${record.favoritePlace!}',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF8A8A8A),
+                      ),
                     ),
                   ],
                   if (record.nickname != null &&
@@ -2260,7 +2257,10 @@ class _NeighborhoodCardState extends State<_NeighborhoodCard> {
                     const SizedBox(height: 4),
                     Text(
                       '별명: ${record.nickname!}',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF8A8A8A),
+                      ),
                     ),
                   ],
                   if (record.bestFriend != null &&
@@ -2268,7 +2268,10 @@ class _NeighborhoodCardState extends State<_NeighborhoodCard> {
                     const SizedBox(height: 4),
                     Text(
                       '친구: ${record.bestFriend!}',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF8A8A8A),
+                      ),
                     ),
                   ],
                   if (record.moveReason != null &&
@@ -2276,7 +2279,10 @@ class _NeighborhoodCardState extends State<_NeighborhoodCard> {
                     const SizedBox(height: 4),
                     Text(
                       '이사 이유: ${record.moveReason!}',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF8A8A8A),
+                      ),
                     ),
                   ],
                 ],
@@ -2293,14 +2299,8 @@ class _NeighborhoodCardState extends State<_NeighborhoodCard> {
               }
             },
             itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: 'edit',
-                child: Text('수정'),
-              ),
-              PopupMenuItem(
-                value: 'delete',
-                child: Text('삭제'),
-              ),
+              PopupMenuItem(value: 'edit', child: Text('수정')),
+              PopupMenuItem(value: 'delete', child: Text('삭제')),
             ],
           ),
         ],
@@ -2737,12 +2737,13 @@ class _AddNeighborhoodSheetState extends State<_AddNeighborhoodSheet> {
     });
     try {
       if (_globalRegionRows != null && _globalRegionRows!.isNotEmpty) {
-        final districts = _globalRegionRows!
-            .map((row) => _extractDistrict(row, province))
-            .whereType<String>()
-            .toSet()
-            .toList()
-          ..sort();
+        final districts =
+            _globalRegionRows!
+                .map((row) => _extractDistrict(row, province))
+                .whereType<String>()
+                .toSet()
+                .toList()
+              ..sort();
         if (!mounted) {
           return;
         }
@@ -2770,12 +2771,13 @@ class _AddNeighborhoodSheetState extends State<_AddNeighborhoodSheet> {
       if (rows.isEmpty) {
         rows = await _fetchAllRows();
       }
-      final districts = rows
-          .map((row) => _extractDistrict(row, province))
-          .whereType<String>()
-          .toSet()
-          .toList()
-        ..sort();
+      final districts =
+          rows
+              .map((row) => _extractDistrict(row, province))
+              .whereType<String>()
+              .toSet()
+              .toList()
+            ..sort();
       if (!mounted) {
         return;
       }
@@ -2800,7 +2802,8 @@ class _AddNeighborhoodSheetState extends State<_AddNeighborhoodSheet> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _regionError = '시/군/구 목록을 불러오지 못했습니다. (${e.toString().replaceAll('Exception: ', '')})';
+          _regionError =
+              '시/군/구 목록을 불러오지 못했습니다. (${e.toString().replaceAll('Exception: ', '')})';
         });
       }
     } finally {
@@ -2843,12 +2846,13 @@ class _AddNeighborhoodSheetState extends State<_AddNeighborhoodSheet> {
     try {
       final query = '$province $district';
       if (_globalRegionRows != null && _globalRegionRows!.isNotEmpty) {
-        final dongs = _globalRegionRows!
-            .map((row) => _extractDong(row, query))
-            .whereType<String>()
-            .toSet()
-            .toList()
-          ..sort();
+        final dongs =
+            _globalRegionRows!
+                .map((row) => _extractDong(row, query))
+                .whereType<String>()
+                .toSet()
+                .toList()
+              ..sort();
         if (!mounted) {
           return;
         }
@@ -2872,12 +2876,13 @@ class _AddNeighborhoodSheetState extends State<_AddNeighborhoodSheet> {
       if (rows.isEmpty) {
         rows = await _fetchAllRows();
       }
-      final dongs = rows
-          .map((row) => _extractDong(row, query))
-          .whereType<String>()
-          .toSet()
-          .toList()
-        ..sort();
+      final dongs =
+          rows
+              .map((row) => _extractDong(row, query))
+              .whereType<String>()
+              .toSet()
+              .toList()
+            ..sort();
       if (!mounted) {
         return;
       }
@@ -2898,7 +2903,8 @@ class _AddNeighborhoodSheetState extends State<_AddNeighborhoodSheet> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _regionError = '동/읍/면 목록을 불러오지 못했습니다. (${e.toString().replaceAll('Exception: ', '')})';
+          _regionError =
+              '동/읍/면 목록을 불러오지 못했습니다. (${e.toString().replaceAll('Exception: ', '')})';
         });
       }
     } finally {
@@ -2914,18 +2920,19 @@ class _AddNeighborhoodSheetState extends State<_AddNeighborhoodSheet> {
     if (_dataGoServiceKey.isEmpty) {
       throw Exception('ServiceKey missing');
     }
-    final uri = Uri.parse(
-      'https://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList',
-    ).replace(
-      queryParameters: {
-        'ServiceKey': _dataGoServiceKey,
-        'serviceKey': _dataGoServiceKey,
-        'pageNo': '1',
-        'numOfRows': '10000',
-        'type': 'json',
-        'locatadd_nm': query,
-      },
-    );
+    final uri =
+        Uri.parse(
+          'https://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList',
+        ).replace(
+          queryParameters: {
+            'ServiceKey': _dataGoServiceKey,
+            'serviceKey': _dataGoServiceKey,
+            'pageNo': '1',
+            'numOfRows': '10000',
+            'type': 'json',
+            'locatadd_nm': query,
+          },
+        );
     final response = await http.get(uri);
     if (response.statusCode != 200) {
       throw Exception('HTTP ${response.statusCode}');
@@ -2957,17 +2964,18 @@ class _AddNeighborhoodSheetState extends State<_AddNeighborhoodSheet> {
       var page = 1;
       const pageSize = 1000;
       while (page <= 60) {
-        final uri = Uri.parse(
-          'https://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList',
-        ).replace(
-          queryParameters: {
-            'ServiceKey': _dataGoServiceKey,
-            'serviceKey': _dataGoServiceKey,
-            'pageNo': '$page',
-            'numOfRows': '$pageSize',
-            'type': 'json',
-          },
-        );
+        final uri =
+            Uri.parse(
+              'https://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList',
+            ).replace(
+              queryParameters: {
+                'ServiceKey': _dataGoServiceKey,
+                'serviceKey': _dataGoServiceKey,
+                'pageNo': '$page',
+                'numOfRows': '$pageSize',
+                'type': 'json',
+              },
+            );
         final response = await http.get(uri);
         if (response.statusCode != 200) {
           break;
@@ -3111,9 +3119,9 @@ class _AddNeighborhoodSheetState extends State<_AddNeighborhoodSheet> {
   }
 
   void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 }
 
@@ -3376,9 +3384,9 @@ class _AddMemorySheetState extends State<_AddMemorySheet> {
   void _save() {
     if (_titleController.text.trim().isEmpty ||
         _contentController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('제목과 내용을 입력해주세요.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('제목과 내용을 입력해주세요.')));
       return;
     }
     final tags = _tagsController.text
@@ -3397,10 +3405,15 @@ class _AddMemorySheetState extends State<_AddMemorySheet> {
         timeCapsule: _timeCapsuleController.text.trim().isEmpty
             ? null
             : _timeCapsuleController.text.trim(),
-        song: _songController.text.trim().isEmpty ? null : _songController.text.trim(),
-        smell: _smellController.text.trim().isEmpty ? null : _smellController.text.trim(),
-        weather:
-            _weatherController.text.trim().isEmpty ? null : _weatherController.text.trim(),
+        song: _songController.text.trim().isEmpty
+            ? null
+            : _songController.text.trim(),
+        smell: _smellController.text.trim().isEmpty
+            ? null
+            : _smellController.text.trim(),
+        weather: _weatherController.text.trim().isEmpty
+            ? null
+            : _weatherController.text.trim(),
       ),
     );
   }
@@ -3525,7 +3538,10 @@ class _EmptyHint extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF9B9B9B),
+                  ),
                 ),
               ],
             ),
@@ -3569,10 +3585,7 @@ class _Badge extends StatelessWidget {
 }
 
 class _AddSchoolSheet extends StatefulWidget {
-  const _AddSchoolSheet({
-    this.initialRecord,
-    required this.onSave,
-  });
+  const _AddSchoolSheet({this.initialRecord, required this.onSave});
 
   final _SchoolRecord? initialRecord;
   final Future<_SchoolRecord?> Function(_SchoolRecord record) onSave;
@@ -3627,7 +3640,8 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
 
   static const String _academyInfoApiKey = String.fromEnvironment(
     'ACADEMYINFO_API_KEY',
-    defaultValue: '47b77db0f3002b862acb7482d8e2853e94d0e7df70e9fe11ef5cb37c7a36ccd6',
+    defaultValue:
+        '47b77db0f3002b862acb7482d8e2853e94d0e7df70e9fe11ef5cb37c7a36ccd6',
   );
 
   static const _provinces = [
@@ -3760,7 +3774,9 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
                           if (_level == _SchoolLevel.elementary ||
                               _level == _SchoolLevel.middle ||
                               _level == _SchoolLevel.high) {
-                            final count = _level == _SchoolLevel.elementary ? 6 : 3;
+                            final count = _level == _SchoolLevel.elementary
+                                ? 6
+                                : 3;
                             _gradeEntries = List.generate(
                               count,
                               (index) => _GradeEntry(
@@ -3926,8 +3942,8 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
                                             strokeWidth: 2,
                                             valueColor:
                                                 AlwaysStoppedAnimation<Color>(
-                                              Colors.white,
-                                            ),
+                                                  Colors.white,
+                                                ),
                                           ),
                                         )
                                       : const Text(
@@ -3961,8 +3977,9 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
                               decoration: BoxDecoration(
                                 color: Colors.white,
                                 borderRadius: BorderRadius.circular(12),
-                                border:
-                                    Border.all(color: const Color(0xFFE7E2F5)),
+                                border: Border.all(
+                                  color: const Color(0xFFE7E2F5),
+                                ),
                               ),
                               child: ListView.separated(
                                 shrinkWrap: true,
@@ -3983,7 +4000,8 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
                                       ),
                                     ),
                                     subtitle: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         const SizedBox(height: 4),
                                         Wrap(
@@ -3993,15 +4011,17 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
                                             if (item.campusType.isNotEmpty)
                                               _Badge(
                                                 label: item.campusType,
-                                                background:
-                                                    const Color(0xFFFDE68A),
+                                                background: const Color(
+                                                  0xFFFDE68A,
+                                                ),
                                                 color: const Color(0xFF92400E),
                                               ),
                                             if (item.address.isNotEmpty)
                                               _Badge(
                                                 label: item.address,
-                                                background:
-                                                    const Color(0xFFE0F2FE),
+                                                background: const Color(
+                                                  0xFFE0F2FE,
+                                                ),
                                                 color: const Color(0xFF0369A1),
                                               ),
                                           ],
@@ -4037,8 +4057,9 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
                               SizedBox(
                                 height: 44,
                                 child: ElevatedButton(
-                                  onPressed:
-                                      _loadingSchoolSearch ? null : _searchSchools,
+                                  onPressed: _loadingSchoolSearch
+                                      ? null
+                                      : _searchSchools,
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: const Color(0xFF22C55E),
                                     shape: RoundedRectangleBorder(
@@ -4054,8 +4075,8 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
                                             strokeWidth: 2,
                                             valueColor:
                                                 AlwaysStoppedAnimation<Color>(
-                                              Colors.white,
-                                            ),
+                                                  Colors.white,
+                                                ),
                                           ),
                                         )
                                       : const Text(
@@ -4089,8 +4110,9 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
                               decoration: BoxDecoration(
                                 color: Colors.white,
                                 borderRadius: BorderRadius.circular(12),
-                                border:
-                                    Border.all(color: const Color(0xFFE7E2F5)),
+                                border: Border.all(
+                                  color: const Color(0xFFE7E2F5),
+                                ),
                               ),
                               child: ListView.separated(
                                 shrinkWrap: true,
@@ -4111,7 +4133,8 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
                                       ),
                                     ),
                                     subtitle: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         const SizedBox(height: 4),
                                         Wrap(
@@ -4122,14 +4145,17 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
                                               label: item.kind.isEmpty
                                                   ? '학교'
                                                   : item.kind,
-                                              background: const Color(0xFFFEE2E2),
+                                              background: const Color(
+                                                0xFFFEE2E2,
+                                              ),
                                               color: const Color(0xFFB91C1C),
                                             ),
                                             if (item.address.isNotEmpty)
                                               _Badge(
                                                 label: item.address,
-                                                background:
-                                                    const Color(0xFFE0F2FE),
+                                                background: const Color(
+                                                  0xFFE0F2FE,
+                                                ),
                                                 color: const Color(0xFF0369A1),
                                               ),
                                           ],
@@ -4154,34 +4180,37 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
                             decoration: _fieldDecoration(_schoolNameHint),
                           ),
                         ],
-                  if (isElementary || isMiddle || isHigh) ...[
-                    const SizedBox(height: 10),
-                    Column(
+                        if (isElementary || isMiddle || isHigh) ...[
+                          const SizedBox(height: 10),
+                          Column(
                             children: _gradeEntries
                                 .map(
-                            (entry) => Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: _GradeRow(
-                                key: ValueKey(
-                                  'grade-row-${entry.grade}-${entry.classNumber ?? -1}-${entry.year}',
-                                ),
-                                entry: entry,
-                                maxClass: 20,
-                                maxGrade: _gradeEntries.isNotEmpty
-                                    ? _gradeEntries.last.grade
-                                    : entry.grade,
-                                onChanged: (updated) {
-                                  setState(() {
-                                    _gradeEntries = _gradeEntries
-                                        .map((entry) => entry.grade == updated.grade
-                                            ? updated
-                                            : entry)
-                                        .toList();
-                                  });
-                                },
-                              ),
-                            ),
-                          )
+                                  (entry) => Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: _GradeRow(
+                                      key: ValueKey(
+                                        'grade-row-${entry.grade}-${entry.classNumber ?? -1}-${entry.year}',
+                                      ),
+                                      entry: entry,
+                                      maxClass: 20,
+                                      maxGrade: _gradeEntries.isNotEmpty
+                                          ? _gradeEntries.last.grade
+                                          : entry.grade,
+                                      onChanged: (updated) {
+                                        setState(() {
+                                          _gradeEntries = _gradeEntries
+                                              .map(
+                                                (entry) =>
+                                                    entry.grade == updated.grade
+                                                    ? updated
+                                                    : entry,
+                                              )
+                                              .toList();
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                )
                                 .toList(),
                           ),
                         ],
@@ -4251,8 +4280,7 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
                                     height: 18,
                                     child: CircularProgressIndicator(
                                       strokeWidth: 2,
-                                      valueColor:
-                                          AlwaysStoppedAnimation<Color>(
+                                      valueColor: AlwaysStoppedAnimation<Color>(
                                         Colors.white,
                                       ),
                                     ),
@@ -4314,12 +4342,16 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
       _showError('학교 이름을 입력해주세요.');
       return;
     }
-    if ((_level == _SchoolLevel.elementary || _level == _SchoolLevel.middle || _level == _SchoolLevel.high) &&
+    if ((_level == _SchoolLevel.elementary ||
+            _level == _SchoolLevel.middle ||
+            _level == _SchoolLevel.high) &&
         _gradeEntries.any((entry) => entry.year <= 0)) {
       _showError('학년별 년도를 모두 선택해주세요.');
       return;
     }
-    if (_level == _SchoolLevel.elementary || _level == _SchoolLevel.middle || _level == _SchoolLevel.high) {
+    if (_level == _SchoolLevel.elementary ||
+        _level == _SchoolLevel.middle ||
+        _level == _SchoolLevel.high) {
       final expected = _level == _SchoolLevel.elementary ? 6 : 3;
       if (_gradeEntries.length != expected) {
         _showError('학년 정보를 모두 입력해주세요.');
@@ -4336,7 +4368,9 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
       id: widget.initialRecord?.id ?? '',
       level: _level,
       province: _level == _SchoolLevel.university ? '' : _province!.label,
-      district: _level == _SchoolLevel.university ? '' : (_districtSelected ?? ''),
+      district: _level == _SchoolLevel.university
+          ? ''
+          : (_districtSelected ?? ''),
       dong: _level == _SchoolLevel.university ? '' : (_dongSelected ?? ''),
       name: _schoolController.text.trim(),
       schoolCode: _selectedSchoolCode,
@@ -4344,7 +4378,8 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
       grade: null,
       classNumber: null,
       year: null,
-      gradeEntries: _level == _SchoolLevel.elementary ||
+      gradeEntries:
+          _level == _SchoolLevel.elementary ||
               _level == _SchoolLevel.middle ||
               _level == _SchoolLevel.high
           ? List<_GradeEntry>.from(_gradeEntries)
@@ -4352,8 +4387,9 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
       kindergartenGradYear: _level == _SchoolLevel.kindergarten
           ? _kindergartenGradYear
           : null,
-      universityEntryYear:
-          _level == _SchoolLevel.university ? _universityEntryYear : null,
+      universityEntryYear: _level == _SchoolLevel.university
+          ? _universityEntryYear
+          : null,
       major: _level == _SchoolLevel.university
           ? _majorController.text.trim()
           : null,
@@ -4457,7 +4493,8 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
         }
         final address = item.address;
         final location = item.location;
-        final hasProvince = address.contains(provinceName) ||
+        final hasProvince =
+            address.contains(provinceName) ||
             location == provinceName ||
             location == _province!.label;
         if (!hasProvince) {
@@ -4471,10 +4508,12 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
       final dongFiltered = dong.isEmpty
           ? districtFiltered
           : districtFiltered
-              .where((item) => item.address.contains(dong))
-              .toList();
+                .where((item) => item.address.contains(dong))
+                .toList();
       setState(() {
-        final chosen = dongFiltered.isNotEmpty ? dongFiltered : districtFiltered;
+        final chosen = dongFiltered.isNotEmpty
+            ? dongFiltered
+            : districtFiltered;
         _schoolSearchResults = chosen.take(30).toList();
         if (_schoolSearchResults.isEmpty) {
           _schoolSearchError = '해당 지역의 학교가 없습니다.';
@@ -4552,8 +4591,9 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
   }
 
   Future<List<_UniversityItem>> _fetchUniversitySchools(String query) async {
+    final localFallback = await _searchUniversitiesLocal(query);
     if (_academyInfoApiKey.isEmpty) {
-      throw Exception('AcademyInfo API key missing');
+      return localFallback;
     }
     final current = DateTime.now().year;
     final candidates = <int>[
@@ -4571,7 +4611,28 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
       }
     }
     final last = await _fetchUniversityResponse(query, current);
+    if (localFallback.isNotEmpty) {
+      return localFallback;
+    }
     throw Exception(last.resultMsg.isNotEmpty ? last.resultMsg : 'API 오류');
+  }
+
+  Future<List<_UniversityItem>> _searchUniversitiesLocal(String query) async {
+    final suggestions = await InstitutionSearchService.search(
+      query: query,
+      organizationType: '교육/연구기관',
+    );
+    return suggestions
+        .map(
+          (s) => _UniversityItem(
+            name: s.name,
+            campusType: s.source,
+            division: '',
+            address: '',
+            schoolId: 'local:${s.name}',
+          ),
+        )
+        .toList();
   }
 
   Future<_AcademyResponse> _fetchUniversityResponse(
@@ -4627,7 +4688,8 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
     final totalCount = int.tryParse(totalCountText) ?? 0;
     final items = <_UniversityItem>[];
     for (final item in doc.findAllElements('item')) {
-      final name = _xmlFirstText(item, 'schlNm') ??
+      final name =
+          _xmlFirstText(item, 'schlNm') ??
           _xmlFirstText(item, 'schlKrnNm') ??
           '';
       if (name.trim().isEmpty) {
@@ -4806,12 +4868,13 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
     });
     try {
       if (_globalRegionRows != null && _globalRegionRows!.isNotEmpty) {
-        final districts = _globalRegionRows!
-            .map((row) => _extractDistrict(row, province))
-            .whereType<String>()
-            .toSet()
-            .toList()
-          ..sort();
+        final districts =
+            _globalRegionRows!
+                .map((row) => _extractDistrict(row, province))
+                .whereType<String>()
+                .toSet()
+                .toList()
+              ..sort();
         if (!mounted) {
           return;
         }
@@ -4839,12 +4902,13 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
       if (rows.isEmpty) {
         rows = await _fetchAllRows();
       }
-      final districts = rows
-          .map((row) => _extractDistrict(row, province))
-          .whereType<String>()
-          .toSet()
-          .toList()
-        ..sort();
+      final districts =
+          rows
+              .map((row) => _extractDistrict(row, province))
+              .whereType<String>()
+              .toSet()
+              .toList()
+            ..sort();
       if (!mounted) {
         return;
       }
@@ -4869,7 +4933,8 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _regionError = '시/군/구 목록을 불러오지 못했습니다. (${e.toString().replaceAll('Exception: ', '')})';
+          _regionError =
+              '시/군/구 목록을 불러오지 못했습니다. (${e.toString().replaceAll('Exception: ', '')})';
         });
         _showError(_regionError!);
       }
@@ -4913,12 +4978,13 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
     try {
       final query = '$province $district';
       if (_globalRegionRows != null && _globalRegionRows!.isNotEmpty) {
-        final dongs = _globalRegionRows!
-            .map((row) => _extractDong(row, query))
-            .whereType<String>()
-            .toSet()
-            .toList()
-          ..sort();
+        final dongs =
+            _globalRegionRows!
+                .map((row) => _extractDong(row, query))
+                .whereType<String>()
+                .toSet()
+                .toList()
+              ..sort();
         if (!mounted) {
           return;
         }
@@ -4942,12 +5008,13 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
       if (rows.isEmpty) {
         rows = await _fetchAllRows();
       }
-      final dongs = rows
-          .map((row) => _extractDong(row, query))
-          .whereType<String>()
-          .toSet()
-          .toList()
-        ..sort();
+      final dongs =
+          rows
+              .map((row) => _extractDong(row, query))
+              .whereType<String>()
+              .toSet()
+              .toList()
+            ..sort();
       if (!mounted) {
         return;
       }
@@ -4968,7 +5035,8 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _regionError = '동/읍/면 목록을 불러오지 못했습니다. (${e.toString().replaceAll('Exception: ', '')})';
+          _regionError =
+              '동/읍/면 목록을 불러오지 못했습니다. (${e.toString().replaceAll('Exception: ', '')})';
         });
         _showError(_regionError!);
       }
@@ -4985,18 +5053,19 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
     if (_dataGoServiceKey.isEmpty) {
       throw Exception('ServiceKey missing');
     }
-    final uri = Uri.parse(
-      'https://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList',
-    ).replace(
-      queryParameters: {
-        'ServiceKey': _dataGoServiceKey,
-        'serviceKey': _dataGoServiceKey,
-        'pageNo': '1',
-        'numOfRows': '10000',
-        'type': 'json',
-        'locatadd_nm': query,
-      },
-    );
+    final uri =
+        Uri.parse(
+          'https://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList',
+        ).replace(
+          queryParameters: {
+            'ServiceKey': _dataGoServiceKey,
+            'serviceKey': _dataGoServiceKey,
+            'pageNo': '1',
+            'numOfRows': '10000',
+            'type': 'json',
+            'locatadd_nm': query,
+          },
+        );
     final response = await http.get(uri);
     if (response.statusCode != 200) {
       throw Exception('HTTP ${response.statusCode}');
@@ -5028,17 +5097,18 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
       var page = 1;
       const pageSize = 1000;
       while (page <= 60) {
-        final uri = Uri.parse(
-          'https://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList',
-        ).replace(
-          queryParameters: {
-            'ServiceKey': _dataGoServiceKey,
-            'serviceKey': _dataGoServiceKey,
-            'pageNo': '$page',
-            'numOfRows': '$pageSize',
-            'type': 'json',
-          },
-        );
+        final uri =
+            Uri.parse(
+              'https://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList',
+            ).replace(
+              queryParameters: {
+                'ServiceKey': _dataGoServiceKey,
+                'serviceKey': _dataGoServiceKey,
+                'pageNo': '$page',
+                'numOfRows': '$pageSize',
+                'type': 'json',
+              },
+            );
         final response = await http.get(uri);
         if (response.statusCode != 200) {
           break;
@@ -5190,9 +5260,9 @@ class _AddSchoolSheetState extends State<_AddSchoolSheet> {
   }
 
   void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   InputDecoration _fieldDecoration(String hint) {
@@ -5292,20 +5362,13 @@ class _NumberPickerField extends StatelessWidget {
   List<DropdownMenuItem<int>> _yearItems(String suffix) {
     final current = DateTime.now().year;
     final start = current - 80;
-    return List.generate(
-      81,
-      (index) {
-        final year = start + index;
-        final label = suffix.isEmpty ? '$year' : '$year년$suffix';
-        return DropdownMenuItem(
-          value: year,
-          child: Text(label),
-        );
-      },
-    ).reversed.toList();
+    return List.generate(81, (index) {
+      final year = start + index;
+      final label = suffix.isEmpty ? '$year' : '$year년$suffix';
+      return DropdownMenuItem(value: year, child: Text(label));
+    }).reversed.toList();
   }
 }
-
 
 class _SectionCard extends StatelessWidget {
   const _SectionCard({required this.title, required this.child});
@@ -5365,7 +5428,8 @@ class _RegionStatus extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = error ??
+    final status =
+        error ??
         '시/군/구 $districts개, 동/읍/면 $dongs개'
             '${loadingDistricts ? ' · 시/군/구 로딩중' : ''}'
             '${loadingDongs ? ' · 동/읍/면 로딩중' : ''}';
@@ -5375,7 +5439,9 @@ class _RegionStatus extends StatelessWidget {
         status,
         style: TextStyle(
           fontSize: 11,
-          color: error == null ? const Color(0xFF9B9B9B) : const Color(0xFFE53935),
+          color: error == null
+              ? const Color(0xFF9B9B9B)
+              : const Color(0xFFE53935),
           fontWeight: error == null ? FontWeight.w500 : FontWeight.w700,
         ),
       ),
@@ -5466,9 +5532,7 @@ class _SchoolCard extends StatelessWidget {
                           TextSpan(text: '${record.kindergartenGradYear}년 '),
                           const TextSpan(
                             text: '2월',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                            ),
+                            style: TextStyle(fontWeight: FontWeight.w600),
                           ),
                           const TextSpan(text: ' 졸업'),
                         ],
@@ -5497,14 +5561,8 @@ class _SchoolCard extends StatelessWidget {
               }
             },
             itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: 'edit',
-                child: Text('수정'),
-              ),
-              PopupMenuItem(
-                value: 'delete',
-                child: Text('삭제'),
-              ),
+              PopupMenuItem(value: 'edit', child: Text('수정')),
+              PopupMenuItem(value: 'delete', child: Text('삭제')),
             ],
           ),
         ],
@@ -5514,14 +5572,50 @@ class _SchoolCard extends StatelessWidget {
 }
 
 enum _SchoolLevel {
-  kindergarten('유치원', 'kindergarten', Icons.child_care_rounded, Color(0xFFFFF4F7), Color(0xFFFF7AA2)),
-  elementary('초등학교', 'elementary', Icons.account_balance_rounded, Color(0xFFEFF7FF), Color(0xFF3A8DFF)),
-  middle('중학교', 'middle', Icons.menu_book_rounded, Color(0xFFEAFBF1), Color(0xFF22C55E)),
-  high('고등학교', 'high', Icons.school_rounded, Color(0xFFF1F1FF), Color(0xFF6D5BD0)),
-  university('대학교', 'university', Icons.apartment_rounded, Color(0xFFFFF3E9), Color(0xFFFF7A3D));
+  kindergarten(
+    '유치원',
+    'kindergarten',
+    Icons.child_care_rounded,
+    Color(0xFFFFF4F7),
+    Color(0xFFFF7AA2),
+  ),
+  elementary(
+    '초등학교',
+    'elementary',
+    Icons.account_balance_rounded,
+    Color(0xFFEFF7FF),
+    Color(0xFF3A8DFF),
+  ),
+  middle(
+    '중학교',
+    'middle',
+    Icons.menu_book_rounded,
+    Color(0xFFEAFBF1),
+    Color(0xFF22C55E),
+  ),
+  high(
+    '고등학교',
+    'high',
+    Icons.school_rounded,
+    Color(0xFFF1F1FF),
+    Color(0xFF6D5BD0),
+  ),
+  university(
+    '대학교',
+    'university',
+    Icons.apartment_rounded,
+    Color(0xFFFFF3E9),
+    Color(0xFFFF7A3D),
+  );
 
-  const _SchoolLevel(this.label, this.key, this.icon, this.tint, this.iconColor,
-      {this.assetPath});
+  const _SchoolLevel(
+    this.label,
+    this.key,
+    this.icon,
+    this.tint,
+    this.iconColor, {
+    this.assetPath,
+  });
 
   final String label;
   final String key;
@@ -5614,10 +5708,7 @@ class _SchoolRecord {
     );
   }
 
-  static _SchoolRecord? fromFirestore(
-    String id,
-    Map<String, dynamic> data,
-  ) {
+  static _SchoolRecord? fromFirestore(String id, Map<String, dynamic> data) {
     final level = _SchoolLevel.fromKey(data['level'] as String?);
     if (level == null) {
       return null;
@@ -5680,7 +5771,9 @@ class _SchoolRecord {
 
   String get footer {
     if (level == _SchoolLevel.university) {
-      final entry = universityEntryYear != null ? '${universityEntryYear}학번' : '';
+      final entry = universityEntryYear != null
+          ? '${universityEntryYear}학번'
+          : '';
       if ((major ?? '').isNotEmpty && entry.isNotEmpty) {
         return '${major!} · $entry';
       }
@@ -5696,7 +5789,8 @@ class _SchoolRecord {
       return year != null ? '${year}년 2월 졸업' : '';
     }
     if (gradeEntries != null && gradeEntries!.isNotEmpty) {
-      final range = '${gradeEntries!.first.grade}~${gradeEntries!.last.grade}학년';
+      final range =
+          '${gradeEntries!.first.grade}~${gradeEntries!.last.grade}학년';
       return '$range 기록';
     }
     if (grade != null && classNumber != null) {
@@ -5743,7 +5837,6 @@ class _SchoolRecord {
     }
     return null;
   }
-
 }
 
 class _NeisSchoolItem {
@@ -5943,10 +6036,7 @@ class _MemoryRecord {
     );
   }
 
-  static _MemoryRecord? fromFirestore(
-    String id,
-    Map<String, dynamic> data,
-  ) {
+  static _MemoryRecord? fromFirestore(String id, Map<String, dynamic> data) {
     final title = data['title'] as String?;
     final content = data['content'] as String?;
     final rawDate = data['date'];
@@ -5959,10 +6049,8 @@ class _MemoryRecord {
     if (title == null || content == null || date == null) {
       return null;
     }
-    final tags = (data['tags'] as List?)
-            ?.whereType<String>()
-            .toList() ??
-        <String>[];
+    final tags =
+        (data['tags'] as List?)?.whereType<String>().toList() ?? <String>[];
     final emotionKey = data['emotion'] as String?;
     final emotion = _EmotionPreset.fromKey(emotionKey);
     return _MemoryRecord(
@@ -6165,9 +6253,7 @@ class _PhotoTab extends StatelessWidget {
 }
 
 class _PhotoHeader extends StatelessWidget {
-  const _PhotoHeader({
-    required this.onUploadTap,
-  });
+  const _PhotoHeader({required this.onUploadTap});
 
   final VoidCallback onUploadTap;
 
@@ -6182,20 +6268,22 @@ class _PhotoHeader extends StatelessWidget {
             color: const Color(0xFFFFEEF4),
             borderRadius: BorderRadius.circular(10),
           ),
-          child: const Icon(Icons.photo_camera_rounded, color: Color(0xFFFF4D88)),
+          child: const Icon(
+            Icons.photo_camera_rounded,
+            color: Color(0xFFFF4D88),
+          ),
         ),
         const SizedBox(width: 10),
-        const Text(
-          '사진 & 동영상',
-          style: TextStyle(fontWeight: FontWeight.w700),
-        ),
+        const Text('사진 & 동영상', style: TextStyle(fontWeight: FontWeight.w700)),
         const Spacer(),
         ElevatedButton.icon(
           onPressed: onUploadTap,
           style: ElevatedButton.styleFrom(
             backgroundColor: const Color(0xFFFF4D88),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+            ),
             elevation: 0,
           ),
           icon: const Icon(Icons.add, size: 18, color: Colors.white),
@@ -6237,8 +6325,11 @@ class _UploadCard extends StatelessWidget {
                 color: const Color(0xFFFFEEF4),
                 borderRadius: BorderRadius.circular(18),
               ),
-              child: const Icon(Icons.photo_camera_rounded,
-                  color: Color(0xFFFF4D88), size: 28),
+              child: const Icon(
+                Icons.photo_camera_rounded,
+                color: Color(0xFFFF4D88),
+                size: 28,
+              ),
             ),
             const SizedBox(height: 14),
             const Text(
@@ -6256,13 +6347,21 @@ class _UploadCard extends StatelessWidget {
               onPressed: onTap,
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFFF4D88),
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 12,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
                 elevation: 0,
               ),
               child: const Text(
                 '파일 선택하기',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
           ],
@@ -6332,8 +6431,11 @@ class _MediaGrid extends StatelessWidget {
                 if (item.isVideo)
                   const Align(
                     alignment: Alignment.center,
-                    child: Icon(Icons.play_circle_fill_rounded,
-                        color: Colors.white, size: 36),
+                    child: Icon(
+                      Icons.play_circle_fill_rounded,
+                      color: Colors.white,
+                      size: 36,
+                    ),
                   ),
                 if (item.uploading)
                   Container(
@@ -6343,7 +6445,8 @@ class _MediaGrid extends StatelessWidget {
                         width: 40,
                         height: 40,
                         child: CircularProgressIndicator(
-                          value: item.uploadProgress > 0 && item.uploadProgress < 1
+                          value:
+                              item.uploadProgress > 0 && item.uploadProgress < 1
                               ? item.uploadProgress
                               : null,
                           color: Colors.white,
@@ -6356,8 +6459,11 @@ class _MediaGrid extends StatelessWidget {
                   Container(
                     color: Colors.black.withOpacity(0.4),
                     child: const Center(
-                      child: Icon(Icons.error_outline_rounded,
-                          color: Colors.white, size: 32),
+                      child: Icon(
+                        Icons.error_outline_rounded,
+                        color: Colors.white,
+                        size: 32,
+                      ),
                     ),
                   ),
                 Positioned(
@@ -6371,7 +6477,11 @@ class _MediaGrid extends StatelessWidget {
                         color: Colors.black.withOpacity(0.55),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(Icons.close, size: 14, color: Colors.white),
+                      child: const Icon(
+                        Icons.close,
+                        size: 14,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                 ),
@@ -6490,11 +6600,7 @@ class _DashedBorderPainter extends CustomPainter {
 }
 
 class _GradeEntry {
-  _GradeEntry({
-    required this.grade,
-    required this.year,
-    this.classNumber,
-  });
+  _GradeEntry({required this.grade, required this.year, this.classNumber});
 
   final int grade;
   final int year;
@@ -6514,11 +6620,7 @@ class _GradeEntry {
   }
 
   Map<String, dynamic> toFirestore() {
-    return {
-      'grade': grade,
-      'year': year,
-      'classNumber': classNumber,
-    };
+    return {'grade': grade, 'year': year, 'classNumber': classNumber};
   }
 
   static List<_GradeEntry>? fromFirestoreList(dynamic value) {
@@ -6613,8 +6715,9 @@ class _GradeRow extends StatelessWidget {
                       }
                       onChanged(
                         entry.copyWith(
-                          classNumber:
-                              value == 'unknown' ? null : int.parse(value),
+                          classNumber: value == 'unknown'
+                              ? null
+                              : int.parse(value),
                           clearClassNumber: value == 'unknown',
                         ),
                       );
@@ -6660,16 +6763,10 @@ class _GradeRow extends StatelessWidget {
   List<DropdownMenuItem<int>> _yearItems() {
     final current = DateTime.now().year;
     final start = current - 80;
-    return List.generate(
-      81,
-      (index) {
-        final year = start + index;
-        return DropdownMenuItem(
-          value: year,
-          child: Text('$year년'),
-        );
-      },
-    ).reversed.toList();
+    return List.generate(81, (index) {
+      final year = start + index;
+      return DropdownMenuItem(value: year, child: Text('$year년'));
+    }).reversed.toList();
   }
 
   String _graduationHint(int lastYear) {

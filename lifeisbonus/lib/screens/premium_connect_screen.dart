@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../services/premium_service.dart';
+import '../utils/institution_alias_store.dart';
+import '../utils/plan_city_alias_store.dart';
 
 class PremiumConnectScreen extends StatefulWidget {
   const PremiumConnectScreen({super.key});
@@ -14,9 +16,15 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
   bool _loading = true;
   PremiumStatus? _status;
   int _schoolMatchCount = 0;
+  int _neighborhoodMatchCount = 0;
   int _planMatchCount = 0;
-  String? _schoolMatchLabel;
   String? _planMatchLabel;
+  final Map<String, int> _neighborhoodMatchDetailCounts = {};
+  final Map<String, String> _neighborhoodPeriodByLabel = {};
+  final Map<String, int> _planCategoryMatchCounts = {};
+  final List<_PremiumDetailItem> _schoolDetailItems = [];
+  final List<_PremiumDetailItem> _neighborhoodDetailItems = [];
+  final List<_PremiumDetailItem> _planDetailItems = [];
   String? _error;
 
   @override
@@ -33,8 +41,15 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
     try {
       final status = await PremiumService.fetchStatus();
       _status = status;
-      await _loadMatches();
+      try {
+        await _loadMatches();
+      } catch (e, st) {
+        debugPrint('[premium-connect] loadMatches error: $e');
+        debugPrint('[premium-connect] stack: $st');
+        _error = '매칭 정보를 불러오지 못했어요.';
+      }
     } catch (e) {
+      debugPrint('[premium-connect] fetchStatus error: $e');
       _error = '프리미엄 정보를 불러오지 못했어요.';
     } finally {
       if (mounted) {
@@ -48,8 +63,56 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
   Future<void> _loadMatches() async {
     final userDocId = await PremiumService.resolveUserDocId();
     if (userDocId == null) {
+      debugPrint('[premium-connect] resolveUserDocId=null');
       return;
     }
+    _schoolMatchCount = 0;
+    _neighborhoodMatchCount = 0;
+    _planMatchCount = 0;
+    _planMatchLabel = null;
+    _neighborhoodMatchDetailCounts.clear();
+    _neighborhoodPeriodByLabel.clear();
+    _planCategoryMatchCounts.clear();
+    _schoolDetailItems.clear();
+    _neighborhoodDetailItems.clear();
+    _planDetailItems.clear();
+    debugPrint('[premium-connect] userDocId=$userDocId');
+    Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>?
+    fallbackAllSchoolsFuture;
+    Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+    loadFallbackAllSchools() {
+      fallbackAllSchoolsFuture ??= (() async {
+        final usersSnap = await FirebaseFirestore.instance
+            .collection('users')
+            .get();
+        final docs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+        for (final user in usersSnap.docs) {
+          final schoolsSnap = await user.reference.collection('schools').get();
+          docs.addAll(schoolsSnap.docs);
+        }
+        return docs;
+      })();
+      return fallbackAllSchoolsFuture!;
+    }
+
+    Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>?
+    fallbackAllPlansFuture;
+    Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+    loadFallbackAllPlans() {
+      fallbackAllPlansFuture ??= (() async {
+        final usersSnap = await FirebaseFirestore.instance
+            .collection('users')
+            .get();
+        final docs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+        for (final user in usersSnap.docs) {
+          final plansSnap = await user.reference.collection('plans').get();
+          docs.addAll(plansSnap.docs);
+        }
+        return docs;
+      })();
+      return fallbackAllPlansFuture!;
+    }
+
     final schoolSnapshot = await FirebaseFirestore.instance
         .collection('users')
         .doc(userDocId)
@@ -57,11 +120,9 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
         .orderBy('updatedAt', descending: true)
         .get();
     if (schoolSnapshot.docs.isNotEmpty) {
-      final matchKeyMap = <String, Set<String>>{};
-      String? lastSchoolName;
+      var schoolTotal = 0;
       for (final doc in schoolSnapshot.docs) {
         final data = doc.data();
-        lastSchoolName ??= data['name'] as String?;
         final storedSchoolKey = data['schoolKey']?.toString();
         final schoolKey = storedSchoolKey ?? _buildSchoolKeyFromData(data);
         final storedKeys = data['matchKeys'] is List
@@ -92,22 +153,38 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
         }
-        matchKeyMap.putIfAbsent(schoolKey, () => <String>{});
-        matchKeyMap[schoolKey]!.addAll(computedKeys);
-      }
-      if (matchKeyMap.isNotEmpty) {
-        var matchCount = 0;
-        final allKeys = matchKeyMap.values
-            .expand((keys) => keys)
+        var recordMatchCount = 0;
+        final allKeys = computedKeys
             .where((key) => key.isNotEmpty)
             .toSet()
             .toList();
-        for (final key in allKeys) {
-          final matchSnap = await FirebaseFirestore.instance
-              .collectionGroup('schools')
-              .where('matchKeys', arrayContains: key)
-              .get();
-          for (final doc in matchSnap.docs) {
+        for (var i = 0; i < allKeys.length; i += 10) {
+          final batch = allKeys.sublist(
+            i,
+            i + 10 > allKeys.length ? allKeys.length : i + 10,
+          );
+          List<QueryDocumentSnapshot<Map<String, dynamic>>> schoolDocs;
+          try {
+            final matchSnap = await FirebaseFirestore.instance
+                .collectionGroup('schools')
+                .where('matchKeys', arrayContainsAny: batch)
+                .get();
+            schoolDocs = matchSnap.docs;
+          } catch (e) {
+            final fallbackDocs = await loadFallbackAllSchools();
+            schoolDocs = fallbackDocs.where((d) {
+              final keys = d.data()['matchKeys'];
+              if (keys is! List) {
+                return false;
+              }
+              final keySet = keys.map((k) => k.toString()).toSet();
+              return batch.any(keySet.contains);
+            }).toList();
+            debugPrint(
+              '[premium-connect] school batch fallback docs=${schoolDocs.length} error=$e',
+            );
+          }
+          for (final doc in schoolDocs) {
             final data = doc.data();
             final ownerId = data['ownerId'] as String?;
             final parentUserId = doc.reference.parent.parent?.id;
@@ -115,62 +192,439 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
             if (resolvedId == null || resolvedId == userDocId) {
               continue;
             }
-            matchCount += 1;
+            final docKeys = data['matchKeys'];
+            final hitCount = docKeys is List
+                ? docKeys.map((k) => k.toString()).where(batch.contains).length
+                : 0;
+            if (hitCount == 0) {
+              continue;
+            }
+            recordMatchCount += hitCount;
           }
         }
-        _schoolMatchCount = matchCount;
-        _schoolMatchLabel = lastSchoolName;
+        if (recordMatchCount > 0) {
+          final label = _buildSchoolDetailLabel(data);
+          _schoolDetailItems.add(
+            _PremiumDetailItem(
+              title: label.$1,
+              subtitle: label.$2,
+              count: recordMatchCount,
+              icon: Icons.school_rounded,
+            ),
+          );
+          schoolTotal += recordMatchCount;
+        }
       }
+      _schoolDetailItems.sort((a, b) => b.count.compareTo(a.count));
+      _schoolMatchCount = schoolTotal;
     }
 
-    final planSnapshot = await FirebaseFirestore.instance
+    try {
+      final userNeighborhoods = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userDocId)
+          .collection('neighborhoods')
+          .get();
+      if (userNeighborhoods.docs.isNotEmpty) {
+        final recordsByKey = <String, List<Map<String, int>>>{};
+        final keyLabelMap = <String, String>{};
+        for (final doc in userNeighborhoods.docs) {
+          final data = doc.data();
+          final province = data['province']?.toString() ?? '';
+          final district = data['district']?.toString() ?? '';
+          final dong = data['dong']?.toString() ?? '';
+          final startYear = _parseFlexibleInt(data['startYear']);
+          final endYear = _parseFlexibleInt(data['endYear']);
+          if (startYear == null || endYear == null) {
+            continue;
+          }
+          var matchKey = data['matchKey'] as String?;
+          if (matchKey == null || matchKey.trim().isEmpty) {
+            matchKey = _buildNeighborhoodMatchKeyFromFields(
+              province,
+              district,
+              dong,
+            );
+          }
+          if (matchKey.isEmpty) {
+            continue;
+          }
+          recordsByKey.putIfAbsent(matchKey, () => <Map<String, int>>[]);
+          recordsByKey[matchKey]!.add({'start': startYear, 'end': endYear});
+          keyLabelMap[matchKey] = [
+            province,
+            district,
+            dong,
+          ].where((v) => v.trim().isNotEmpty).join(' ');
+        }
+        for (final entry in recordsByKey.entries) {
+          final ranges = entry.value;
+          if (ranges.isEmpty) {
+            continue;
+          }
+          var minYear = ranges.first['start']!;
+          var maxYear = ranges.first['end']!;
+          for (final range in ranges) {
+            final start = range['start']!;
+            final end = range['end']!;
+            final low = start <= end ? start : end;
+            final high = start <= end ? end : start;
+            if (low < minYear) {
+              minYear = low;
+            }
+            if (high > maxYear) {
+              maxYear = high;
+            }
+          }
+          final label = keyLabelMap[entry.key] ?? entry.key;
+          _neighborhoodPeriodByLabel[label] = '$minYear년 ~ $maxYear년';
+        }
+        if (recordsByKey.isNotEmpty) {
+          var matchCount = 0;
+          for (final entry in recordsByKey.entries) {
+            final matchKey = entry.key;
+            final ranges = entry.value;
+            final snap = await FirebaseFirestore.instance
+                .collectionGroup('neighborhoods')
+                .where('matchKey', isEqualTo: matchKey)
+                .get();
+            for (final doc in snap.docs) {
+              final data = doc.data();
+              final ownerId = data['ownerId'] as String?;
+              final parentId = doc.reference.parent.parent?.id;
+              final resolvedId = ownerId ?? parentId;
+              if (resolvedId == null || resolvedId == userDocId) {
+                continue;
+              }
+              final startYear = _parseFlexibleInt(data['startYear']);
+              final endYear = _parseFlexibleInt(data['endYear']);
+              if (startYear == null || endYear == null) {
+                continue;
+              }
+              var overlaps = false;
+              for (final range in ranges) {
+                final rangeStart = range['start']!;
+                final rangeEnd = range['end']!;
+                if (_rangesOverlap(rangeStart, rangeEnd, startYear, endYear)) {
+                  overlaps = true;
+                  break;
+                }
+              }
+              if (overlaps) {
+                matchCount += 1;
+                final label = keyLabelMap[matchKey] ?? matchKey;
+                _neighborhoodMatchDetailCounts[label] =
+                    (_neighborhoodMatchDetailCounts[label] ?? 0) + 1;
+              }
+            }
+          }
+          _neighborhoodMatchCount = matchCount;
+          final sortedDetails = _neighborhoodMatchDetailCounts.entries.toList()
+            ..sort((a, b) => b.value.compareTo(a.value));
+          for (final entry in sortedDetails) {
+            _neighborhoodDetailItems.add(
+              _PremiumDetailItem(
+                title: entry.key,
+                subtitle: _neighborhoodPeriodByLabel[entry.key] ?? '',
+                count: entry.value,
+                icon: Icons.home_rounded,
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[premium-connect] neighborhood error: $e');
+    }
+
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
+    final allPlanSnapshot = await FirebaseFirestore.instance
         .collection('users')
         .doc(userDocId)
         .collection('plans')
-        .orderBy('endDate', descending: false)
-        .limit(1)
         .get();
-    if (planSnapshot.docs.isNotEmpty) {
-      final doc = planSnapshot.docs.first;
-      final data = doc.data();
-      final matchKey = _buildPlanMatchKeyFromData(data);
-      if (matchKey != null && matchKey.isNotEmpty) {
-        if (data['matchKey'] == null) {
-          await doc.reference.set({'matchKey': matchKey}, SetOptions(merge: true));
+    final activePlanDocs = allPlanSnapshot.docs.where((doc) {
+      final end = _parseDateValue(doc.data()['endDate']);
+      return end != null && !end.isBefore(today);
+    }).toList();
+    if (activePlanDocs.isNotEmpty) {
+      final allPlanMatches = <String>{};
+      List<QueryDocumentSnapshot<Map<String, dynamic>>>? travelPool;
+      for (final doc in activePlanDocs) {
+        final myPlanId = doc.id;
+        final data = doc.data();
+        _planMatchLabel ??= data['title'] as String?;
+        final myStart = _parseDateValue(data['startDate']);
+        final myEnd = _parseDateValue(data['endDate']);
+        final myCategory = data['category']?.toString() ?? '';
+        final localMatchTokens = <String>{};
+        final myCountryNorm = _normalizeCountryForMatch(
+          data['country']?.toString() ?? '',
+        );
+        final myCityNorm = _normalizeCityForMatch(
+          data['city']?.toString() ?? '',
+        );
+        final computedMatchKey = _buildPlanMatchKeyFromData(data);
+        final storedMatchKey = data['matchKey'] as String?;
+        final legacyMatchKey = _buildLegacyTravelPlanMatchKeyFromData(data);
+        final queryKeys = <String>{
+          if (computedMatchKey != null && computedMatchKey.isNotEmpty)
+            computedMatchKey,
+          if (storedMatchKey != null && storedMatchKey.isNotEmpty)
+            storedMatchKey,
+          if (legacyMatchKey != null && legacyMatchKey.isNotEmpty)
+            legacyMatchKey,
+        };
+        if (computedMatchKey != null &&
+            computedMatchKey.isNotEmpty &&
+            data['matchKey'] != computedMatchKey) {
+          await doc.reference.set({
+            'matchKey': computedMatchKey,
+            'countryNorm': _normalizeCountryForMatch(
+              data['country']?.toString() ?? '',
+            ),
+            'cityNorm': _normalizeCityForMatch(data['city']?.toString() ?? ''),
+            'ownerId': userDocId,
+          }, SetOptions(merge: true));
         }
-        final matchSnap = await FirebaseFirestore.instance
-            .collectionGroup('plans')
-            .where('matchKey', isEqualTo: matchKey)
-            .get();
-        final count = matchSnap.docs.where((matchDoc) {
-          final ownerId = matchDoc.data()['ownerId'];
-          final parentUserId = matchDoc.reference.parent.parent?.id;
-          return ownerId != userDocId && parentUserId != userDocId;
-        }).length;
-        _planMatchCount = count;
-        _planMatchLabel = data['title'] as String?;
+        for (final key in queryKeys) {
+          List<QueryDocumentSnapshot<Map<String, dynamic>>> planDocs;
+          try {
+            final matchSnap = await FirebaseFirestore.instance
+                .collectionGroup('plans')
+                .where('matchKey', isEqualTo: key)
+                .get();
+            planDocs = matchSnap.docs;
+          } catch (e) {
+            final fallbackDocs = await loadFallbackAllPlans();
+            planDocs = fallbackDocs.where((d) {
+              return (d.data()['matchKey']?.toString() ?? '') == key;
+            }).toList();
+            debugPrint(
+              '[premium-connect] plan key=$key fallback docs=${planDocs.length} error=$e',
+            );
+          }
+          for (final matchDoc in planDocs) {
+            final ownerId = matchDoc.data()['ownerId'] as String?;
+            final parentUserId = matchDoc.reference.parent.parent?.id;
+            final resolvedId = ownerId ?? parentUserId;
+            if (resolvedId == null || resolvedId == userDocId) {
+              continue;
+            }
+            final otherEnd = _parseDateValue(matchDoc.data()['endDate']);
+            if (otherEnd == null || otherEnd.isBefore(today)) {
+              continue;
+            }
+            if (myStart != null && myEnd != null) {
+              final otherStart = _parseDateValue(matchDoc.data()['startDate']);
+              if (otherStart == null ||
+                  !_dateRangesOverlap(myStart, myEnd, otherStart, otherEnd)) {
+                continue;
+              }
+            }
+            final matchToken = '$myPlanId|$resolvedId|${matchDoc.id}';
+            allPlanMatches.add(matchToken);
+            localMatchTokens.add(matchToken);
+          }
+        }
+        if (myCategory == '여행' &&
+            myCountryNorm.isNotEmpty &&
+            myCityNorm.isNotEmpty &&
+            myStart != null &&
+            myEnd != null) {
+          if (travelPool == null) {
+            try {
+              travelPool =
+                  (await FirebaseFirestore.instance
+                          .collectionGroup('plans')
+                          .where('category', isEqualTo: '여행')
+                          .get())
+                      .docs;
+            } catch (e) {
+              final fallbackDocs = await loadFallbackAllPlans();
+              travelPool = fallbackDocs.where((d) {
+                return (d.data()['category']?.toString() ?? '') == '여행';
+              }).toList();
+              debugPrint(
+                '[premium-connect] travel fallback docs=${travelPool.length} error=$e',
+              );
+            }
+          }
+          final travelDocs = travelPool;
+          for (final matchDoc in travelDocs) {
+            final ownerId = matchDoc.data()['ownerId'] as String?;
+            final parentUserId = matchDoc.reference.parent.parent?.id;
+            final resolvedId = ownerId ?? parentUserId;
+            if (resolvedId == null || resolvedId == userDocId) {
+              continue;
+            }
+            final otherCountryNorm = _normalizeCountryForMatch(
+              matchDoc.data()['country']?.toString() ?? '',
+            );
+            final otherCityNorm = _normalizeCityForMatch(
+              matchDoc.data()['city']?.toString() ?? '',
+            );
+            if (otherCountryNorm != myCountryNorm ||
+                otherCityNorm != myCityNorm) {
+              continue;
+            }
+            final otherStart = _parseDateValue(matchDoc.data()['startDate']);
+            final otherEnd = _parseDateValue(matchDoc.data()['endDate']);
+            if (otherStart == null ||
+                otherEnd == null ||
+                otherEnd.isBefore(today)) {
+              continue;
+            }
+            if (_dateRangesOverlap(myStart, myEnd, otherStart, otherEnd)) {
+              final matchToken = '$myPlanId|$resolvedId|${matchDoc.id}';
+              allPlanMatches.add(matchToken);
+              localMatchTokens.add(matchToken);
+            }
+          }
+        }
+        if (localMatchTokens.isNotEmpty) {
+          final localCount = localMatchTokens.length;
+          _planCategoryMatchCounts[myCategory] =
+              (_planCategoryMatchCounts[myCategory] ?? 0) + localCount;
+          _planDetailItems.add(
+            _PremiumDetailItem(
+              title: _buildPlanDetailTitle(data),
+              subtitle: _buildPlanDetailSubtitle(
+                data,
+                myStart,
+                myEnd,
+                myCategory,
+              ),
+              count: localCount,
+              icon: Icons.map_rounded,
+            ),
+          );
+        }
       }
+      _planDetailItems.sort((a, b) => b.count.compareTo(a.count));
+      _planMatchCount = allPlanMatches.length;
     }
   }
 
+  (String, String) _buildSchoolDetailLabel(Map<String, dynamic> data) {
+    final schoolName = data['name']?.toString() ?? '학교';
+    var title = schoolName;
+    var subtitle = '';
+    final level = data['level']?.toString() ?? '';
+    final gradeEntries = data['gradeEntries'];
+    if (gradeEntries is List && gradeEntries.isNotEmpty) {
+      final sorted = gradeEntries.whereType<Map>().toList()
+        ..sort(
+          (a, b) => (b['year'] as num? ?? 0).compareTo(a['year'] as num? ?? 0),
+        );
+      final entry = sorted.first;
+      final grade = entry['grade'];
+      final classNumber = entry['classNumber'];
+      final year = entry['year'];
+      if (grade != null && classNumber != null) {
+        title = '$schoolName $grade학년 $classNumber반';
+      }
+      if (year != null) {
+        subtitle = '$year년';
+      }
+    } else {
+      if (level == 'kindergarten') {
+        final gradYear = _parseFlexibleInt(data['kindergartenGradYear']);
+        if (gradYear != null) {
+          subtitle = '$gradYear년';
+        }
+      }
+      final grade = data['grade'];
+      final classNumber = data['classNumber'];
+      final year = data['year'];
+      if (grade != null && classNumber != null) {
+        title = '$schoolName $grade학년 $classNumber반';
+      }
+      if (year != null) {
+        subtitle = '$year년';
+      }
+    }
+    return (title, subtitle);
+  }
+
+  String _buildPlanDetailTitle(Map<String, dynamic> data) {
+    final category = data['category']?.toString() ?? '';
+    if (category == '여행') {
+      final country = data['country']?.toString() ?? '';
+      final city = data['city']?.toString() ?? '';
+      final label = [
+        country,
+        city,
+      ].where((v) => v.trim().isNotEmpty).join(' / ');
+      if (label.isNotEmpty) {
+        return label;
+      }
+    }
+    if (category == '이직') {
+      final org = data['targetOrganization']?.toString() ?? '';
+      if (org.trim().isNotEmpty) {
+        return org;
+      }
+    }
+    if (category == '건강') {
+      final type = data['healthType']?.toString() ?? '';
+      if (type.trim().isNotEmpty) {
+        return type;
+      }
+    }
+    if (category == '인생목표') {
+      final type = data['lifeGoalType']?.toString() ?? '';
+      if (type.trim().isNotEmpty) {
+        return type;
+      }
+    }
+    final title = data['title']?.toString() ?? '';
+    return title.trim().isNotEmpty ? title : '계획';
+  }
+
+  String _buildPlanDetailSubtitle(
+    Map<String, dynamic> data,
+    DateTime? start,
+    DateTime? end,
+    String category,
+  ) {
+    final range = _formatDateRangeCompact(start, end);
+    if (range.isEmpty) {
+      return category;
+    }
+    if (category.isEmpty) {
+      return range;
+    }
+    return '$category · $range';
+  }
+
+  String _formatDateRangeCompact(DateTime? start, DateTime? end) {
+    if (start == null || end == null) {
+      return '';
+    }
+    String fmt(DateTime d) {
+      final y = d.year.toString().padLeft(4, '0');
+      final m = d.month.toString().padLeft(2, '0');
+      final day = d.day.toString().padLeft(2, '0');
+      return '$y.$m.$day';
+    }
+
+    return '${fmt(start)} ~ ${fmt(end)}';
+  }
+
   String _normalize(String value) =>
-      value.trim().toLowerCase().replaceAll(' ', '').replaceAll('-', '');
+      value.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9가-힣]'), '');
 
   String _normalizeProvince(String value) {
     var normalized = _normalize(value);
     if (normalized.isEmpty) {
       return normalized;
     }
-    const suffixes = [
-      '특별자치시',
-      '특별자치도',
-      '광역시',
-      '특별시',
-      '자치시',
-      '자치도',
-      '도',
-      '시',
-    ];
+    const suffixes = ['특별자치시', '특별자치도', '광역시', '특별시', '자치시', '자치도', '도', '시'];
     for (final suffix in suffixes) {
       if (normalized.endsWith(suffix)) {
         normalized = normalized.substring(0, normalized.length - suffix.length);
@@ -208,6 +662,25 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
       }
     }
     return normalized;
+  }
+
+  String _buildNeighborhoodMatchKeyFromFields(
+    String province,
+    String district,
+    String dong,
+  ) {
+    final normalizedProvince = _normalizeProvince(province);
+    final normalizedDistrict = _normalizeDistrict(district);
+    final normalizedDong = _normalizeDong(dong);
+    return '$normalizedProvince|$normalizedDistrict|$normalizedDong';
+  }
+
+  bool _rangesOverlap(int startA, int endA, int startB, int endB) {
+    final aStart = startA <= endA ? startA : endA;
+    final aEnd = startA <= endA ? endA : startA;
+    final bStart = startB <= endB ? startB : endB;
+    final bEnd = startB <= endB ? endB : startB;
+    return aStart <= bEnd && bStart <= aEnd;
   }
 
   int? _parseFlexibleInt(dynamic value) {
@@ -289,6 +762,9 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
   }
 
   String? _buildPlanMatchKeyFromData(Map<String, dynamic> data) {
+    final category = data['category']?.toString() ?? '';
+    final country = data['country']?.toString() ?? '';
+    final city = data['city']?.toString() ?? '';
     final location = _normalize(data['location']?.toString() ?? '');
     final start = data['startDate'];
     DateTime? startDate;
@@ -299,10 +775,127 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
     } else if (start is String) {
       startDate = DateTime.tryParse(start);
     }
-    if (startDate == null || location.isEmpty) {
+    if (startDate == null) {
       return null;
     }
-    return '${startDate.year}|$location';
+    if (category == '여행') {
+      final countryNorm = _normalizeCountryForMatch(country);
+      final cityNorm = _normalizeCityForMatch(city);
+      if (countryNorm.isNotEmpty && cityNorm.isNotEmpty) {
+        return 'travel|$countryNorm|$cityNorm';
+      }
+    }
+    if (category == '이직') {
+      final typeNorm = _normalize(data['organizationType']?.toString() ?? '');
+      final orgNorm = InstitutionAliasStore.instance.normalize(
+        data['targetOrganization']?.toString() ?? '',
+      );
+      if (typeNorm.isNotEmpty && orgNorm.isNotEmpty) {
+        return 'careerchange|$typeNorm|$orgNorm';
+      }
+    }
+    if (category == '건강') {
+      final typeNorm = _normalize(data['healthType']?.toString() ?? '');
+      if (typeNorm.isNotEmpty) {
+        return 'health|$typeNorm';
+      }
+    }
+    if (category == '인생목표') {
+      final lifeGoalNorm = _normalize(data['lifeGoalType']?.toString() ?? '');
+      if (lifeGoalNorm.isNotEmpty) {
+        return 'lifegoal|$lifeGoalNorm';
+      }
+    }
+    if (location.isEmpty) {
+      return null;
+    }
+    return '${startDate.year}|$category|$location';
+  }
+
+  String? _buildLegacyTravelPlanMatchKeyFromData(Map<String, dynamic> data) {
+    final category = data['category']?.toString() ?? '';
+    if (category != '여행') {
+      return null;
+    }
+    final startDate = _parseDateValue(data['startDate']);
+    if (startDate == null) {
+      return null;
+    }
+    final countryNorm = _normalizeCountryForMatch(
+      data['country']?.toString() ?? '',
+    );
+    final cityNorm = _normalizeCityForMatch(data['city']?.toString() ?? '');
+    if (countryNorm.isEmpty || cityNorm.isEmpty) {
+      return null;
+    }
+    return '${startDate.year}|travel|$countryNorm|$cityNorm';
+  }
+
+  String _normalizeCountryForMatch(String value) {
+    final normalized = _normalize(value);
+    const aliases = {
+      '한국': 'southkorea',
+      '대한민국': 'southkorea',
+      '대한민국국내': 'southkorea',
+      'southkorea': 'southkorea',
+      'korearepublicof': 'southkorea',
+      'republicofkorea': 'southkorea',
+      '일본': 'japan',
+      '일본국': 'japan',
+      'japan': 'japan',
+      '미국': 'usa',
+      '미합중국': 'usa',
+      'unitedstates': 'usa',
+      'usa': 'usa',
+      '중국': 'china',
+      '중화인민공화국': 'china',
+      'china': 'china',
+    };
+    return aliases[normalized] ?? normalized;
+  }
+
+  DateTime? _parseDateValue(dynamic value) {
+    if (value is Timestamp) {
+      final date = value.toDate().toLocal();
+      return DateTime(date.year, date.month, date.day);
+    }
+    if (value is DateTime) {
+      final date = value.toLocal();
+      return DateTime(date.year, date.month, date.day);
+    }
+    if (value is String) {
+      final parsed = DateTime.tryParse(value);
+      if (parsed != null) {
+        final date = parsed.toLocal();
+        return DateTime(date.year, date.month, date.day);
+      }
+    }
+    return null;
+  }
+
+  bool _dateRangesOverlap(
+    DateTime startA,
+    DateTime endA,
+    DateTime startB,
+    DateTime endB,
+  ) {
+    final aStart = startA.isBefore(endA) || startA.isAtSameMomentAs(endA)
+        ? startA
+        : endA;
+    final aEnd = startA.isBefore(endA) || startA.isAtSameMomentAs(endA)
+        ? endA
+        : startA;
+    final bStart = startB.isBefore(endB) || startB.isAtSameMomentAs(endB)
+        ? startB
+        : endB;
+    final bEnd = startB.isBefore(endB) || startB.isAtSameMomentAs(endB)
+        ? endB
+        : startB;
+    return !aEnd.isBefore(bStart) && !bEnd.isBefore(aStart);
+  }
+
+  String _normalizeCityForMatch(String value) {
+    return PlanCityAliasStore.instance.normalize(value);
   }
 
   Future<void> _subscribe() async {
@@ -313,10 +906,10 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
   @override
   Widget build(BuildContext context) {
     final isPremium = _status?.isPremium == true;
+    final totalCount =
+        _schoolMatchCount + _neighborhoodMatchCount + _planMatchCount;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('프리미엄 연결'),
-      ),
+      appBar: AppBar(title: const Text('프리미엄 연결')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
@@ -333,29 +926,244 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
                     ),
                   _PremiumHeader(isPremium: isPremium),
                   const SizedBox(height: 16),
+                  if (!isPremium) ...[
+                    _SubscribeCard(onSubscribe: _subscribe),
+                    const SizedBox(height: 16),
+                  ] else ...[
+                    _TotalMatchCard(totalCount: totalCount),
+                    const SizedBox(height: 12),
+                  ],
+                  if (!isPremium) ...[
+                    _TotalMatchCard(totalCount: totalCount),
+                    const SizedBox(height: 12),
+                  ],
                   _MatchSummaryCard(
-                    title: _schoolMatchLabel ?? '같은 학교 친구',
+                    title: '같은 학교였던 친구들',
                     subtitle: '동일 학교/반/년도 기반 매칭',
                     count: _schoolMatchCount,
                     icon: Icons.school_rounded,
                   ),
                   const SizedBox(height: 12),
                   _MatchSummaryCard(
-                    title: _planMatchLabel ?? '같은 계획',
-                    subtitle: '동일 장소/기간 기반 매칭',
+                    title: '같은 동네였던 이웃들',
+                    subtitle: '동일 동네/거주기간 기반 매칭',
+                    count: _neighborhoodMatchCount,
+                    icon: Icons.home_rounded,
+                  ),
+                  const SizedBox(height: 12),
+                  _MatchSummaryCard(
+                    title: '비슷한 계획을 가진 사람들',
+                    subtitle: '동일 카테고리/세부조건/기간 기반 매칭',
                     count: _planMatchCount,
                     icon: Icons.map_rounded,
                   ),
                   const SizedBox(height: 16),
-                  if (!isPremium)
-                    _SubscribeCard(onSubscribe: _subscribe)
-                  else
-                    const _PremiumActiveCard(),
+                  _DetailSection(
+                    title: '학교 매칭 상세',
+                    items: _schoolDetailItems,
+                    emptyLabel: '학교 매칭 상세가 없습니다.',
+                  ),
+                  const SizedBox(height: 12),
+                  _DetailSection(
+                    title: '동네 매칭 상세',
+                    items: _neighborhoodDetailItems,
+                    emptyLabel: '동네 매칭 상세가 없습니다.',
+                  ),
+                  const SizedBox(height: 12),
+                  _DetailSection(
+                    title: '계획 매칭 상세',
+                    items: _planDetailItems,
+                    emptyLabel: '계획 매칭 상세가 없습니다.',
+                  ),
                   const SizedBox(height: 16),
-                  const _ChatInfoCard(),
+                  if (isPremium) const _PremiumActiveCard(),
                 ],
               ),
             ),
+    );
+  }
+}
+
+class _TotalMatchCard extends StatelessWidget {
+  const _TotalMatchCard({required this.totalCount});
+
+  final int totalCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5EEFF),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text(
+            '총 매칭',
+            style: TextStyle(
+              fontSize: 12,
+              color: Color(0xFF707070),
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          Text(
+            '$totalCount명',
+            style: const TextStyle(
+              fontSize: 16,
+              color: Color(0xFF8E5BFF),
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailSection extends StatelessWidget {
+  const _DetailSection({
+    required this.title,
+    required this.items,
+    required this.emptyLabel,
+  });
+
+  final String title;
+  final List<_PremiumDetailItem> items;
+  final String emptyLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF4A4A4A),
+          ),
+        ),
+        const SizedBox(height: 10),
+        if (items.isEmpty)
+          Text(
+            emptyLabel,
+            style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
+          )
+        else
+          ...items.map(
+            (item) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _DetailItemCard(item: item),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _DetailItemCard extends StatelessWidget {
+  const _DetailItemCard({required this.item});
+
+  final _PremiumDetailItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x14000000),
+            blurRadius: 12,
+            offset: Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFF1E9FF),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  item.icon,
+                  size: 16,
+                  color: const Color(0xFF8E5BFF),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.title,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    if (item.subtitle.isNotEmpty)
+                      Text(
+                        item.subtitle,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF9B9B9B),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF1FF),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '${item.count}명',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF3A8DFF),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          const Divider(height: 1),
+          const SizedBox(height: 10),
+          Row(
+            children: const [
+              Icon(
+                Icons.emoji_events_rounded,
+                color: Color(0xFFF4B740),
+                size: 18,
+              ),
+              SizedBox(width: 6),
+              Text(
+                '프리미엄으로 확인하기',
+                style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -368,7 +1176,7 @@ class _PremiumHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [Color(0xFFB356FF), Color(0xFFFF4FA6)],
@@ -377,8 +1185,11 @@ class _PremiumHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.workspace_premium_rounded,
-              color: Colors.white, size: 26),
+          const Icon(
+            Icons.workspace_premium_rounded,
+            color: Colors.white,
+            size: 20,
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
@@ -386,7 +1197,7 @@ class _PremiumHeader extends StatelessWidget {
               style: const TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.w700,
-                fontSize: 14,
+                fontSize: 13,
               ),
             ),
           ),
@@ -464,11 +1275,12 @@ class _MatchSummaryCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(999),
             ),
             child: Text(
-              '${count}명',
+              '$count명',
               style: const TextStyle(
                 fontSize: 11,
                 color: Color(0xFF3A8DFF),
-                fontWeight: FontWeight.w700),
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -493,12 +1305,12 @@ class _SubscribeCard extends StatelessWidget {
       child: Column(
         children: [
           const Text(
-            '월 9,900원으로 매칭 시작',
+            '월 9,900원으로 소중한 인연 만들기',
             style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
           ),
           const SizedBox(height: 8),
           const Text(
-            '스토어 인앱결제 연결 전 테스트용 구독 흐름입니다.',
+            '매칭된 사용자와 쪽지 탭에서 대화를 시작할 수 있어요.',
             style: TextStyle(fontSize: 11, color: Color(0xFF7A7A7A)),
             textAlign: TextAlign.center,
           ),
@@ -556,29 +1368,16 @@ class _PremiumActiveCard extends StatelessWidget {
   }
 }
 
-class _ChatInfoCard extends StatelessWidget {
-  const _ChatInfoCard();
+class _PremiumDetailItem {
+  const _PremiumDetailItem({
+    required this.title,
+    required this.subtitle,
+    required this.count,
+    required this.icon,
+  });
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        children: const [
-          Icon(Icons.chat_bubble_outline, color: Color(0xFF8E5BFF)),
-          SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              '매칭된 사용자와 쪽지 탭에서 대화를 시작할 수 있어요.',
-              style: TextStyle(fontSize: 12, color: Color(0xFF7A7A7A)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  final String title;
+  final String subtitle;
+  final int count;
+  final IconData icon;
 }

@@ -6,10 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/institution_search_service.dart';
+import '../utils/institution_alias_store.dart';
+import '../utils/plan_city_alias_store.dart';
+
 List<_CountryOption>? _countryOptionsCache;
-final Map<String, List<String>> _cityOptionsCache = {};
-List<Map<String, dynamic>>? _countriesNowRawCache;
-final Map<String, String> _cityKoNameCache = {};
 
 class PlanScreen extends StatefulWidget {
   const PlanScreen({super.key});
@@ -22,6 +23,7 @@ class _PlanScreenState extends State<PlanScreen> {
   final List<_PlanRecord> _plans = [];
   bool _loading = false;
   String? _loadError;
+  bool _showPastPlans = false;
 
   @override
   void initState() {
@@ -33,10 +35,14 @@ class _PlanScreenState extends State<PlanScreen> {
   Widget build(BuildContext context) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final upcomingCount =
-        _plans.where((plan) => !plan.endDate.isBefore(today)).length.toString();
-    final pastCount =
-        _plans.where((plan) => plan.endDate.isBefore(today)).length.toString();
+    final upcomingPlans =
+        _plans.where((plan) => !plan.endDate.isBefore(today)).toList()
+          ..sort((a, b) => _compareUpcomingPlans(a, b, today));
+    final pastPlans =
+        _plans.where((plan) => plan.endDate.isBefore(today)).toList()
+          ..sort((a, b) => b.endDate.compareTo(a.endDate));
+    final upcomingCount = upcomingPlans.length.toString();
+    final pastCount = pastPlans.length.toString();
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
       child: Column(
@@ -108,8 +114,10 @@ class _PlanScreenState extends State<PlanScreen> {
                 GestureDetector(
                   onTap: _openAddPlan,
                   child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFF3A8DFF),
                       borderRadius: BorderRadius.circular(999),
@@ -153,7 +161,7 @@ class _PlanScreenState extends State<PlanScreen> {
               subtitle: '새로운 계획을 추가해보세요',
             )
           else
-            ..._plans
+            ...upcomingPlans
                 .map(
                   (plan) => Padding(
                     padding: const EdgeInsets.only(bottom: 14),
@@ -168,10 +176,83 @@ class _PlanScreenState extends State<PlanScreen> {
                       highlight: plan.highlight,
                       onDetail: () => _openPlanDetail(plan),
                       onEdit: () => _openEditPlan(plan),
+                      onDelete: () => _confirmDeletePlan(plan),
                     ),
                   ),
                 )
                 .toList(),
+          if (pastPlans.isNotEmpty) ...[
+            GestureDetector(
+              onTap: () => setState(() => _showPastPlans = !_showPastPlans),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF4F2FF),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.history_rounded,
+                      size: 18,
+                      color: Color(0xFF7C6CFF),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '지난 계획 ${pastPlans.length}개',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF4A4A4A),
+                        ),
+                      ),
+                    ),
+                    Text(
+                      _showPastPlans ? '접어서 보기' : '펼쳐서 보기',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF7C6CFF),
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Icon(
+                      _showPastPlans
+                          ? Icons.keyboard_arrow_up_rounded
+                          : Icons.keyboard_arrow_down_rounded,
+                      color: const Color(0xFF7C6CFF),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (_showPastPlans)
+              ...pastPlans
+                  .map(
+                    (plan) => Padding(
+                      padding: const EdgeInsets.only(bottom: 14),
+                      child: _PlanCard(
+                        category: plan.category,
+                        year: plan.yearLabel,
+                        title: plan.title,
+                        location: plan.location,
+                        description: plan.description,
+                        dday: plan.ddayLabel,
+                        accent: plan.accent,
+                        highlight: plan.highlight,
+                        onDetail: () => _openPlanDetail(plan),
+                        onEdit: () => _openEditPlan(plan),
+                        onDelete: () => _confirmDeletePlan(plan),
+                      ),
+                    ),
+                  )
+                  .toList(),
+          ],
           const SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.all(16),
@@ -200,6 +281,25 @@ class _PlanScreenState extends State<PlanScreen> {
         ],
       ),
     );
+  }
+
+  int _compareUpcomingPlans(_PlanRecord a, _PlanRecord b, DateTime today) {
+    int daysUntilStart(_PlanRecord plan) {
+      if (plan.startDate.isBefore(today)) {
+        return 0;
+      }
+      return plan.startDate.difference(today).inDays;
+    }
+
+    final byNearest = daysUntilStart(a).compareTo(daysUntilStart(b));
+    if (byNearest != 0) {
+      return byNearest;
+    }
+    final byStart = a.startDate.compareTo(b.startDate);
+    if (byStart != 0) {
+      return byStart;
+    }
+    return a.endDate.compareTo(b.endDate);
   }
 
   Future<void> _loadPlans() async {
@@ -270,7 +370,6 @@ class _PlanScreenState extends State<PlanScreen> {
     }
     setState(() {
       _plans.add(saved);
-      _plans.sort((a, b) => a.endDate.compareTo(b.endDate));
     });
   }
 
@@ -296,8 +395,55 @@ class _PlanScreenState extends State<PlanScreen> {
       if (index >= 0) {
         _plans[index] = saved;
       }
-      _plans.sort((a, b) => a.endDate.compareTo(b.endDate));
     });
+  }
+
+  Future<void> _confirmDeletePlan(_PlanRecord record) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('계획 삭제'),
+        content: const Text('정말 삭제하시겠어요?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text(
+              '삭제하기',
+              style: TextStyle(color: Color(0xFFE15241)),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    try {
+      final userDocId = await _resolveUserDocId();
+      if (userDocId == null) {
+        _showSnack('로그인 정보가 없어 삭제할 수 없어요.');
+        return;
+      }
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userDocId)
+          .collection('plans')
+          .doc(record.id)
+          .delete();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _plans.removeWhere((plan) => plan.id == record.id);
+      });
+      _showSnack('계획이 삭제되었습니다.');
+    } catch (e) {
+      _showSnack('삭제에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})');
+    }
   }
 
   Future<void> _openPlanDetail(_PlanRecord record) async {
@@ -320,6 +466,8 @@ class _PlanScreenState extends State<PlanScreen> {
         return null;
       }
       final matchKey = _buildPlanMatchKey(record);
+      final countryNorm = _normalizeCountryForMatch(record.country ?? '');
+      final cityNorm = _normalizeCityForMatch(record.city ?? '');
       final data = {
         'category': record.category,
         'startDate': record.startDate,
@@ -328,6 +476,16 @@ class _PlanScreenState extends State<PlanScreen> {
         'location': record.location,
         'country': record.country,
         'city': record.city,
+        'countryNorm': countryNorm,
+        'cityNorm': cityNorm,
+        'organizationType': record.organizationType,
+        'targetOrganization': record.targetOrganization,
+        'jobRole': record.jobRole,
+        'lifeGoalType': record.lifeGoalType,
+        'lifeGoalStage': record.lifeGoalStage,
+        'healthType': record.healthType,
+        'healthActivity': record.healthActivity,
+        'healthFrequency': record.healthFrequency,
         'description': record.description,
         'highlight': record.highlight,
         'matchKey': matchKey,
@@ -339,10 +497,7 @@ class _PlanScreenState extends State<PlanScreen> {
             .collection('users')
             .doc(userDocId)
             .collection('plans')
-            .add({
-          ...data,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+            .add({...data, 'createdAt': FieldValue.serverTimestamp()});
         return record.copyWith(id: docRef.id);
       }
       await FirebaseFirestore.instance
@@ -353,44 +508,115 @@ class _PlanScreenState extends State<PlanScreen> {
           .set(data, SetOptions(merge: true));
       return record;
     } catch (e) {
-      _showSnack('계획 저장에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})');
+      _showSnack(
+        '계획 저장에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})',
+      );
       return null;
     }
   }
 
   String _buildPlanMatchKey(_PlanRecord record) {
-    String normalize(String value) =>
-        value.trim().toLowerCase().replaceAll(' ', '');
-    final location = normalize(record.location);
-    return '${record.startDate.year}|$location';
+    if (record.category == '여행') {
+      final countryNorm = _normalizeCountryForMatch(record.country ?? '');
+      final cityNorm = _normalizeCityForMatch(record.city ?? '');
+      if (countryNorm.isNotEmpty && cityNorm.isNotEmpty) {
+        return 'travel|$countryNorm|$cityNorm';
+      }
+    }
+    if (record.category == '이직') {
+      final typeNorm = _normalizeTextForMatch(record.organizationType ?? '');
+      final orgNorm = InstitutionAliasStore.instance.normalize(
+        record.targetOrganization ?? '',
+      );
+      if (typeNorm.isNotEmpty && orgNorm.isNotEmpty) {
+        return 'careerchange|$typeNorm|$orgNorm';
+      }
+    }
+    if (record.category == '건강') {
+      final typeNorm = _normalizeTextForMatch(record.healthType ?? '');
+      if (typeNorm.isNotEmpty) {
+        return 'health|$typeNorm';
+      }
+    }
+    if (record.category == '인생목표') {
+      final lifeGoalNorm = _normalizeTextForMatch(record.lifeGoalType ?? '');
+      if (lifeGoalNorm.isNotEmpty) {
+        return 'lifegoal|$lifeGoalNorm';
+      }
+    }
+    final locationNorm = _normalizeTextForMatch(record.location);
+    return '${record.startDate.year}|${record.category}|$locationNorm';
+  }
+
+  String _normalizeTextForMatch(String value) =>
+      value.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9가-힣]'), '');
+
+  String _normalizeCountryForMatch(String value) {
+    final normalized = _normalizeTextForMatch(value);
+    const aliases = {
+      '한국': 'southkorea',
+      '대한민국': 'southkorea',
+      '대한민국국내': 'southkorea',
+      'southkorea': 'southkorea',
+      'korearepublicof': 'southkorea',
+      'republicofkorea': 'southkorea',
+      '일본': 'japan',
+      '일본국': 'japan',
+      'japan': 'japan',
+      '미국': 'usa',
+      '미합중국': 'usa',
+      'unitedstates': 'usa',
+      'usa': 'usa',
+      '중국': 'china',
+      '중화인민공화국': 'china',
+      'china': 'china',
+    };
+    return aliases[normalized] ?? normalized;
+  }
+
+  String _normalizeCityForMatch(String value) {
+    return PlanCityAliasStore.instance.normalize(value);
   }
 
   Future<String?> _resolveUserDocId() async {
     final prefs = await SharedPreferences.getInstance();
     final provider = prefs.getString('lastProvider');
     final providerId = prefs.getString('lastProviderId');
-    if (provider != null && providerId != null) {
-      if (provider == 'kakao' || provider == 'naver') {
-        return '$provider:$providerId';
+    final authUser = FirebaseAuth.instance.currentUser;
+    if (authUser != null) {
+      final providerIds = authUser.providerData
+          .map((item) => item.providerId)
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      final isEmailOrGoogle =
+          providerIds.contains('password') ||
+          providerIds.contains('google.com') ||
+          providerIds.contains('apple.com');
+      if (isEmailOrGoogle) {
+        return authUser.uid;
       }
     }
-    final authUser = FirebaseAuth.instance.currentUser;
+    if ((provider == 'kakao' || provider == 'naver') &&
+        providerId != null &&
+        providerId.isNotEmpty) {
+      return '$provider:$providerId';
+    }
     if (authUser != null) {
       return authUser.uid;
     }
-    if (provider == null || providerId == null) {
-      return null;
+    if (providerId != null && providerId.isNotEmpty) {
+      return providerId;
     }
-    return providerId;
+    return null;
   }
 
   void _showSnack(String message) {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 }
 
@@ -405,6 +631,7 @@ class _PlanCard extends StatelessWidget {
     required this.accent,
     required this.onDetail,
     required this.onEdit,
+    required this.onDelete,
     this.highlight = false,
   });
 
@@ -417,6 +644,7 @@ class _PlanCard extends StatelessWidget {
   final Color accent;
   final VoidCallback onDetail;
   final VoidCallback onEdit;
+  final VoidCallback onDelete;
   final bool highlight;
 
   @override
@@ -426,10 +654,7 @@ class _PlanCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: const Color(0xFFEFEAFB),
-          width: 1,
-        ),
+        border: Border.all(color: const Color(0xFFEFEAFB), width: 1),
         boxShadow: const [
           BoxShadow(
             color: Color(0x14000000),
@@ -466,45 +691,68 @@ class _PlanCard extends StatelessWidget {
                 style: const TextStyle(fontSize: 11, color: Color(0xFF8A8A8A)),
               ),
               const Spacer(),
-                if (highlight)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFF7A87),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Text(
-                      '중요',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-              if (highlight) const SizedBox(width: 8),
               GestureDetector(
                 onTap: onEdit,
                 child: const Icon(Icons.edit_rounded, color: Color(0xFFBDBDBD)),
               ),
+              const SizedBox(width: 6),
+              GestureDetector(
+                onTap: onDelete,
+                child: const Icon(
+                  Icons.delete_forever_rounded,
+                  color: Color(0xFFBDBDBD),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 10),
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              if (highlight) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFF7A87),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Text(
+                    '중요',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
           const SizedBox(height: 8),
           Row(
             children: [
-              const Icon(Icons.location_on_outlined,
-                  size: 14, color: Color(0xFF8A8A8A)),
+              Icon(
+                category == '인생목표'
+                    ? Icons.track_changes_rounded
+                    : Icons.location_on_outlined,
+                size: 14,
+                color: const Color(0xFF8A8A8A),
+              ),
               const SizedBox(width: 4),
               Text(
-                location,
+                category == '인생목표' ? '현재 단계: $location' : location,
                 style: const TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
               ),
             ],
@@ -527,8 +775,6 @@ class _PlanCard extends StatelessWidget {
               ),
               const Spacer(),
               _OutlineButton(label: '상세보기', accent: accent, onTap: onDetail),
-              const SizedBox(width: 8),
-              _FilledButton(label: '수정하기', accent: accent, onTap: onEdit),
             ],
           ),
         ],
@@ -563,40 +809,6 @@ class _OutlineButton extends StatelessWidget {
           style: TextStyle(
             fontSize: 11,
             color: accent,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _FilledButton extends StatelessWidget {
-  const _FilledButton({
-    required this.label,
-    required this.accent,
-    required this.onTap,
-  });
-
-  final String label;
-  final Color accent;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(999),
-          color: accent,
-        ),
-        child: Text(
-          label,
-          style: const TextStyle(
-            fontSize: 11,
-            color: Colors.white,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -682,7 +894,10 @@ class _EmptyHint extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF8A8A8A),
+                  ),
                 ),
               ],
             ),
@@ -704,6 +919,14 @@ class _PlanRecord {
     required this.description,
     this.country,
     this.city,
+    this.organizationType,
+    this.targetOrganization,
+    this.jobRole,
+    this.lifeGoalType,
+    this.lifeGoalStage,
+    this.healthType,
+    this.healthActivity,
+    this.healthFrequency,
     required this.highlight,
   });
 
@@ -716,15 +939,29 @@ class _PlanRecord {
   final String description;
   final String? country;
   final String? city;
+  final String? organizationType;
+  final String? targetOrganization;
+  final String? jobRole;
+  final String? lifeGoalType;
+  final String? lifeGoalStage;
+  final String? healthType;
+  final String? healthActivity;
+  final String? healthFrequency;
   final bool highlight;
 
-  String get yearLabel =>
-      '${startDate.year}년 ~ ${endDate.year}년';
+  String get yearLabel {
+    final startMonth = startDate.month.toString().padLeft(2, '0');
+    final startDay = startDate.day.toString().padLeft(2, '0');
+    final endMonth = endDate.month.toString().padLeft(2, '0');
+    final endDay = endDate.day.toString().padLeft(2, '0');
+    return '${startDate.year}.$startMonth.$startDay ~ ${endDate.year}.$endMonth.$endDay';
+  }
 
   String get ddayLabel {
     final now = DateTime.now();
-    final days =
-        endDate.difference(DateTime(now.year, now.month, now.day)).inDays;
+    final days = endDate
+        .difference(DateTime(now.year, now.month, now.day))
+        .inDays;
     if (days >= 0) {
       return 'D-$days일';
     }
@@ -741,6 +978,8 @@ class _PlanRecord {
         return const Color(0xFF3A8DFF);
       case '건강':
         return const Color(0xFF3DBA6E);
+      case '이직':
+        return const Color(0xFF4F86F7);
       default:
         return const Color(0xFF7C6CFF);
     }
@@ -756,6 +995,14 @@ class _PlanRecord {
     String? description,
     String? country,
     String? city,
+    String? organizationType,
+    String? targetOrganization,
+    String? jobRole,
+    String? lifeGoalType,
+    String? lifeGoalStage,
+    String? healthType,
+    String? healthActivity,
+    String? healthFrequency,
     bool? highlight,
   }) {
     return _PlanRecord(
@@ -768,6 +1015,14 @@ class _PlanRecord {
       description: description ?? this.description,
       country: country ?? this.country,
       city: city ?? this.city,
+      organizationType: organizationType ?? this.organizationType,
+      targetOrganization: targetOrganization ?? this.targetOrganization,
+      jobRole: jobRole ?? this.jobRole,
+      lifeGoalType: lifeGoalType ?? this.lifeGoalType,
+      lifeGoalStage: lifeGoalStage ?? this.lifeGoalStage,
+      healthType: healthType ?? this.healthType,
+      healthActivity: healthActivity ?? this.healthActivity,
+      healthFrequency: healthFrequency ?? this.healthFrequency,
       highlight: highlight ?? this.highlight,
     );
   }
@@ -779,6 +1034,14 @@ class _PlanRecord {
     final description = data['description'] as String?;
     final country = data['country'] as String?;
     final city = data['city'] as String?;
+    final organizationType = data['organizationType'] as String?;
+    final targetOrganization = data['targetOrganization'] as String?;
+    final jobRole = data['jobRole'] as String?;
+    final lifeGoalType = data['lifeGoalType'] as String?;
+    final lifeGoalStage = data['lifeGoalStage'] as String?;
+    final healthType = data['healthType'] as String?;
+    final healthActivity = data['healthActivity'] as String?;
+    final healthFrequency = data['healthFrequency'] as String?;
     DateTime? targetDate;
     final rawDate = data['targetDate'];
     final rawStart = data['startDate'];
@@ -818,6 +1081,14 @@ class _PlanRecord {
       description: description,
       country: country,
       city: city,
+      organizationType: organizationType,
+      targetOrganization: targetOrganization,
+      jobRole: jobRole,
+      lifeGoalType: lifeGoalType,
+      lifeGoalStage: lifeGoalStage,
+      healthType: healthType,
+      healthActivity: healthActivity,
+      healthFrequency: healthFrequency,
       highlight: data['highlight'] == true,
     );
   }
@@ -845,6 +1116,36 @@ class _AddPlanSheet extends StatefulWidget {
 }
 
 class _AddPlanSheetState extends State<_AddPlanSheet> {
+  static const List<String> _healthTypeOptions = <String>[
+    '체중관리',
+    '헬스',
+    '달리기',
+    '스포츠',
+    '수면',
+    '식습관',
+    '금연/절주',
+    '검진/치료',
+    '마음건강',
+  ];
+  static const List<String> _lifeGoalTypeOptions = <String>[
+    '결혼',
+    '출산',
+    '효도',
+    '집 사기',
+    '부채 청산',
+    '종잣돈 모으기',
+    '은퇴',
+    '창업',
+    '독서',
+    '악기 배우기',
+  ];
+  static const List<String> _lifeGoalStageOptions = <String>[
+    '아이디어',
+    '준비 중',
+    '실행 중',
+    '재 도전',
+    '유지 관리',
+  ];
   static const List<String> _popularCountryApiOrder = <String>[
     'South Korea',
     'Japan',
@@ -866,15 +1167,24 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
   ];
   final _titleController = TextEditingController();
   final _locationController = TextEditingController();
+  final _cityController = TextEditingController();
+  final _organizationController = TextEditingController();
+  final _jobRoleController = TextEditingController();
+  final _healthActivityController = TextEditingController();
+  final _healthFrequencyController = TextEditingController();
   final _descriptionController = TextEditingController();
   String _category = '여행';
+  String _organizationType = '회사';
+  String _healthType = '헬스';
+  String _lifeGoalType = '결혼';
+  String _lifeGoalStage = '아이디어';
   String? _selectedCountryApi;
   String? _selectedCountryDisplay;
-  String? _selectedCity;
   List<_CountryOption> _countryOptions = [];
-  List<String> _cityOptions = [];
+  List<InstitutionSuggestion> _institutionSuggestions = [];
   bool _loadingCountries = false;
-  bool _loadingCities = false;
+  bool _loadingInstitution = false;
+  int _institutionSearchToken = 0;
   DateTime _startDate = DateTime.now();
   DateTime _endDate = DateTime.now();
   bool _highlight = false;
@@ -892,13 +1202,37 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
       _endDate = record.endDate;
       _highlight = record.highlight;
       _selectedCountryDisplay = record.country;
-      _selectedCity = record.city;
-      if ((_selectedCountryDisplay == null || _selectedCountryDisplay!.isEmpty) &&
+      _cityController.text = record.city ?? '';
+      _organizationType = record.organizationType ?? '회사';
+      _organizationController.text = record.targetOrganization ?? '';
+      _jobRoleController.text = record.jobRole ?? '';
+      _healthType = _normalizeHealthType(record.healthType);
+      _healthActivityController.text = record.healthActivity ?? '';
+      _healthFrequencyController.text = record.healthFrequency ?? '';
+      _lifeGoalType = _normalizeLifeGoalType(data: record);
+      _lifeGoalStage = _normalizeLifeGoalStage(data: record);
+      if (_category == '여행' &&
+          (_selectedCountryDisplay == null ||
+              _selectedCountryDisplay!.isEmpty) &&
           record.location.contains(' / ')) {
         final split = record.location.split(' / ');
         if (split.length >= 2) {
           _selectedCountryDisplay = split.first.trim();
-          _selectedCity = split.sublist(1).join(' / ').trim();
+          _cityController.text = split.sublist(1).join(' / ').trim();
+        }
+      }
+      if (_category == '건강' &&
+          (_healthActivityController.text.isEmpty) &&
+          record.location.contains(' / ')) {
+        final split = record.location.split(' / ');
+        if (split.isNotEmpty) {
+          _healthType = _normalizeHealthType(split.first.trim());
+        }
+        if (split.length >= 2) {
+          _healthActivityController.text = split[1].trim();
+        }
+        if (split.length >= 3) {
+          _healthFrequencyController.text = split.sublist(2).join(' / ').trim();
         }
       }
     }
@@ -907,10 +1241,39 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
     }
   }
 
+  String _normalizeHealthType(String? raw) {
+    final value = (raw ?? '').trim();
+    if (value.isEmpty) return '헬스';
+    if (value == '운동') return '헬스';
+    if (_healthTypeOptions.contains(value)) return value;
+    return '헬스';
+  }
+
+  String _normalizeLifeGoalType({required _PlanRecord data}) {
+    final raw = (data.lifeGoalType ?? '').trim();
+    if (_lifeGoalTypeOptions.contains(raw)) {
+      return raw;
+    }
+    return '결혼';
+  }
+
+  String _normalizeLifeGoalStage({required _PlanRecord data}) {
+    final raw = (data.lifeGoalStage ?? data.location).trim();
+    if (_lifeGoalStageOptions.contains(raw)) {
+      return raw;
+    }
+    return '아이디어';
+  }
+
   @override
   void dispose() {
     _titleController.dispose();
     _locationController.dispose();
+    _cityController.dispose();
+    _organizationController.dispose();
+    _jobRoleController.dispose();
+    _healthActivityController.dispose();
+    _healthFrequencyController.dispose();
     _descriptionController.dispose();
     super.dispose();
   }
@@ -952,8 +1315,8 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
                       value: _category,
                       items: const [
                         DropdownMenuItem(value: '여행', child: Text('여행')),
+                        DropdownMenuItem(value: '이직', child: Text('이직')),
                         DropdownMenuItem(value: '인생목표', child: Text('인생목표')),
-                        DropdownMenuItem(value: '커리어', child: Text('커리어')),
                         DropdownMenuItem(value: '건강', child: Text('건강')),
                       ],
                       onChanged: (value) {
@@ -965,8 +1328,22 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
                           if (_category != '여행') {
                             _selectedCountryApi = null;
                             _selectedCountryDisplay = null;
-                            _selectedCity = null;
-                            _cityOptions = [];
+                            _cityController.clear();
+                          }
+                          if (_category != '이직') {
+                            _organizationType = '회사';
+                            _organizationController.clear();
+                            _jobRoleController.clear();
+                            _institutionSuggestions = [];
+                          }
+                          if (_category != '건강') {
+                            _healthType = '헬스';
+                            _healthActivityController.clear();
+                            _healthFrequencyController.clear();
+                          }
+                          if (_category != '인생목표') {
+                            _lifeGoalType = '결혼';
+                            _lifeGoalStage = '아이디어';
                           }
                         });
                         if (value == '여행') {
@@ -977,8 +1354,56 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
                     ),
                   ),
                   const SizedBox(height: 12),
+                  if (_category == '인생목표') ...[
+                    _PlanSection(
+                      title: '세부 카테고리',
+                      child: DropdownButtonFormField<String>(
+                        value: _lifeGoalType,
+                        items: _lifeGoalTypeOptions
+                            .map(
+                              (type) => DropdownMenuItem(
+                                value: type,
+                                child: Text(type),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setState(() {
+                            _lifeGoalType = value;
+                          });
+                        },
+                        decoration: _fieldDecoration('세부 카테고리 선택'),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (_category == '건강') ...[
+                    _PlanSection(
+                      title: '건강 유형',
+                      child: DropdownButtonFormField<String>(
+                        value: _healthType,
+                        items: _healthTypeOptions
+                            .map(
+                              (type) => DropdownMenuItem(
+                                value: type,
+                                child: Text(type),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setState(() {
+                            _healthType = value;
+                          });
+                        },
+                        decoration: _fieldDecoration('예: 운동'),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   _PlanSection(
-                    title: '기간',
+                    title: _category == '이직' ? '준비 기간' : '기간',
                     child: Row(
                       children: [
                         Expanded(
@@ -1015,88 +1440,230 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  _PlanSection(
-                    title: '제목',
-                    child: TextField(
-                      controller: _titleController,
-                      decoration: _fieldDecoration('예: 첫 번째 해외여행'),
+                  if (_category == '건강') ...[
+                    const SizedBox(height: 12),
+                    _PlanSection(
+                      title: '활동/목표명',
+                      child: TextField(
+                        controller: _healthActivityController,
+                        decoration: _fieldDecoration('예: 10km 런닝, 10kg 체중 감량'),
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 12),
+                    _PlanSection(
+                      title: '빈도(선택)',
+                      child: TextField(
+                        controller: _healthFrequencyController,
+                        decoration: _fieldDecoration('예: 주 3회, 매일'),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 12),
-                  _PlanSection(
-                    title: _category == '여행' ? '장소(나라)' : '장소',
-                    child: _category == '여행'
-                        ? DropdownButtonFormField<String>(
-                            value: _selectedCountryApi,
-                            isExpanded: true,
-                            items: _buildCountryDropdownItems(),
-                            onChanged: _loadingCountries
-                                ? null
-                                : (value) {
-                                    if (value == null) {
-                                      return;
-                                    }
-                                    final selected = _countryOptions.firstWhere(
-                                      (c) => c.apiName == value,
-                                      orElse: () => _CountryOption(
-                                        apiName: value,
-                                        displayName: value,
-                                        regionGroup: 'Other',
-                                      ),
-                                    );
-                                    setState(() {
-                                      _selectedCountryApi = selected.apiName;
-                                      _selectedCountryDisplay =
-                                          selected.displayName;
-                                      _selectedCity = null;
-                                      _cityOptions = [];
-                                    });
-                                    _loadCitiesForCountry(selected.apiName);
-                                  },
-                            decoration: _fieldDecoration(
-                              _loadingCountries
-                                  ? '나라 목록 불러오는 중...'
-                                  : '예: 한국',
-                            ),
-                          )
-                        : TextField(
-                            controller: _locationController,
-                            decoration: _fieldDecoration('예: 일본 교토'),
-                          ),
-                  ),
+                  if (_category != '건강') ...[
+                    _PlanSection(
+                      title: _category == '인생목표' ? '목표 명' : '제목',
+                      child: TextField(
+                        controller: _titleController,
+                        decoration: _fieldDecoration(
+                          _category == '이직'
+                              ? '예: 첫 번째 이직 도전'
+                              : _category == '인생목표'
+                              ? '예: 40세까지 내 집 마련'
+                              : '예: 첫 번째 해외여행',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    if (_category != '인생목표')
+                      _PlanSection(
+                        title: _category == '여행'
+                            ? '장소(국가)'
+                            : _category == '이직'
+                            ? '목표 기관 유형'
+                            : '장소',
+                        child: _category == '여행'
+                            ? DropdownButtonFormField<String>(
+                                value: _selectedCountryApi,
+                                isExpanded: true,
+                                items: _buildCountryDropdownItems(),
+                                onChanged: _loadingCountries
+                                    ? null
+                                    : (value) {
+                                        if (value == null) {
+                                          return;
+                                        }
+                                        final selected = _countryOptions
+                                            .firstWhere(
+                                              (c) => c.apiName == value,
+                                              orElse: () => _CountryOption(
+                                                apiName: value,
+                                                displayName: value,
+                                                regionGroup: 'Other',
+                                              ),
+                                            );
+                                        setState(() {
+                                          _selectedCountryApi =
+                                              selected.apiName;
+                                          _selectedCountryDisplay =
+                                              selected.displayName;
+                                        });
+                                      },
+                                decoration: _fieldDecoration(
+                                  _loadingCountries
+                                      ? '나라 목록 불러오는 중...'
+                                      : '예: 대한민국',
+                                ),
+                              )
+                            : _category == '이직'
+                            ? DropdownButtonFormField<String>(
+                                value: _organizationType,
+                                items: const [
+                                  DropdownMenuItem(
+                                    value: '회사',
+                                    child: Text('회사'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: '공공기관',
+                                    child: Text('공공기관'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: '교육/연구기관',
+                                    child: Text('교육/연구기관'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: '기타',
+                                    child: Text('기타'),
+                                  ),
+                                ],
+                                onChanged: (value) {
+                                  if (value == null) {
+                                    return;
+                                  }
+                                  setState(() {
+                                    _organizationType = value;
+                                    _institutionSuggestions = [];
+                                  });
+                                  _searchInstitutions(
+                                    _organizationController.text,
+                                  );
+                                },
+                                decoration: _fieldDecoration('예: 회사 / 공공기관'),
+                              )
+                            : TextField(
+                                controller: _locationController,
+                                decoration: _fieldDecoration('예: 일본 교토'),
+                              ),
+                      ),
+                  ],
+                  if (_category == '인생목표') ...[
+                    const SizedBox(height: 12),
+                    _PlanSection(
+                      title: '현재 진행 단계',
+                      child: DropdownButtonFormField<String>(
+                        value: _lifeGoalStage,
+                        items: _lifeGoalStageOptions
+                            .map(
+                              (stage) => DropdownMenuItem(
+                                value: stage,
+                                child: Text(stage),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setState(() {
+                            _lifeGoalStage = value;
+                          });
+                        },
+                        decoration: _fieldDecoration('진행 단계 선택'),
+                      ),
+                    ),
+                  ],
                   if (_category == '여행') ...[
                     const SizedBox(height: 12),
                     _PlanSection(
                       title: '장소(도시)',
-                      child: DropdownButtonFormField<String>(
-                        value: _selectedCity,
-                        isExpanded: true,
-                        items: _cityOptions
-                            .map(
-                              (city) => DropdownMenuItem<String>(
-                                value: city,
-                                child: Text(city),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (_selectedCountryApi == null || _loadingCities)
-                            ? null
-                            : (value) {
-                                if (value == null) {
-                                  return;
-                                }
-                                setState(() {
-                                  _selectedCity = value;
-                                });
-                              },
+                      child: TextField(
+                        controller: _cityController,
+                        enabled: _selectedCountryApi != null,
                         decoration: _fieldDecoration(
                           _selectedCountryApi == null
                               ? '먼저 나라를 선택해주세요'
-                              : (_loadingCities
-                                  ? '도시 목록 불러오는 중...'
-                                  : '예: 도쿄'),
+                              : '예: 도쿄',
                         ),
+                      ),
+                    ),
+                  ],
+                  if (_category == '이직') ...[
+                    const SizedBox(height: 12),
+                    _PlanSection(
+                      title: '목표 기관명',
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          TextField(
+                            controller: _organizationController,
+                            onChanged: _searchInstitutions,
+                            decoration: _fieldDecoration(
+                              _loadingInstitution
+                                  ? '기관명 검색 중...'
+                                  : '예: 케이티, 한국아이비엠',
+                            ),
+                          ),
+                          if (_institutionSuggestions.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Container(
+                              constraints: const BoxConstraints(maxHeight: 180),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: const Color(0xFFE5E7EB),
+                                ),
+                              ),
+                              child: ListView.separated(
+                                shrinkWrap: true,
+                                itemCount: _institutionSuggestions.length,
+                                separatorBuilder: (_, __) => const Divider(
+                                  height: 1,
+                                  color: Color(0xFFF1F5F9),
+                                ),
+                                itemBuilder: (context, index) {
+                                  final item = _institutionSuggestions[index];
+                                  return ListTile(
+                                    dense: true,
+                                    title: Text(
+                                      item.name,
+                                      style: const TextStyle(fontSize: 13),
+                                    ),
+                                    subtitle: Text(
+                                      item.source,
+                                      style: const TextStyle(
+                                        fontSize: 10,
+                                        color: Color(0xFF9B9B9B),
+                                      ),
+                                    ),
+                                    onTap: () {
+                                      setState(() {
+                                        _organizationController.text =
+                                            item.name;
+                                        _institutionSuggestions = [];
+                                      });
+                                    },
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _PlanSection(
+                      title: '직무/직군',
+                      child: TextField(
+                        controller: _jobRoleController,
+                        decoration: _fieldDecoration('예: 백엔드 개발, 행정, 회계'),
                       ),
                     ),
                   ],
@@ -1180,14 +1747,23 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
   }
 
   Future<void> _pickDate({required bool isStart}) async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     final initial = isStart ? _startDate : _endDate;
+    final safeInitial = initial.isBefore(today) ? today : initial;
     final picked = await showDatePicker(
       context: context,
-      initialDate: initial,
-      firstDate: DateTime(1950),
+      initialDate: safeInitial,
+      firstDate: today,
       lastDate: DateTime(DateTime.now().year + 50),
     );
     if (picked != null) {
+      if (picked.isBefore(today)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('시작일자는 오늘 이전으로 선택할 수 없어요.')),
+        );
+        return;
+      }
       setState(() {
         if (isStart) {
           _startDate = picked;
@@ -1205,47 +1781,105 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
   }
 
   void _save() {
-    final title = _titleController.text.trim();
+    final inputTitle = _titleController.text.trim();
     final description = _descriptionController.text.trim();
-    if (title.isEmpty || description.isEmpty) {
+    if (_category == '건강'
+        ? description.isEmpty
+        : (inputTitle.isEmpty || description.isEmpty)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('제목과 설명을 입력해주세요.')),
+        SnackBar(
+          content: Text(_category == '건강' ? '설명을 입력해주세요.' : '제목과 설명을 입력해주세요.'),
+        ),
       );
       return;
     }
     String location;
     String? country;
     String? city;
+    String? organizationType;
+    String? targetOrganization;
+    String? jobRole;
+    String? lifeGoalType;
+    String? lifeGoalStage;
+    String? healthType;
+    String? healthActivity;
+    String? healthFrequency;
     if (_category == '여행') {
-      if ((_selectedCountryDisplay ?? '').isEmpty || (_selectedCity ?? '').isEmpty) {
+      final cityInput = _cityController.text.trim();
+      if ((_selectedCountryDisplay ?? '').isEmpty || cityInput.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('여행 카테고리는 나라와 도시를 선택해주세요.')),
+          const SnackBar(content: Text('여행 카테고리는 나라와 도시를 입력해주세요.')),
         );
         return;
       }
       country = _selectedCountryDisplay!.trim();
-      city = _selectedCity!.trim();
+      city = cityInput;
       location = '$country / $city';
-    } else {
-      location = _locationController.text.trim();
-      if (location.isEmpty) {
+    } else if (_category == '이직') {
+      final org = _organizationController.text.trim();
+      final role = _jobRoleController.text.trim();
+      if (org.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('장소를 입력해주세요.')),
+          const SnackBar(content: Text('이직 카테고리는 목표 기관명을 입력해주세요.')),
         );
         return;
       }
+      organizationType = _organizationType;
+      targetOrganization = org;
+      jobRole = role.isEmpty ? null : role;
+      location = jobRole == null
+          ? '$organizationType / $targetOrganization'
+          : '$organizationType / $targetOrganization / $jobRole';
+    } else if (_category == '건강') {
+      final activity = _healthActivityController.text.trim();
+      if (activity.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('건강 카테고리는 활동/목표명을 입력해주세요.')),
+        );
+        return;
+      }
+      healthType = _healthType;
+      healthActivity = activity;
+      final frequency = _healthFrequencyController.text.trim();
+      healthFrequency = frequency.isEmpty ? null : frequency;
+      location = healthFrequency == null
+          ? '$healthType / $healthActivity'
+          : '$healthType / $healthActivity / $healthFrequency';
+    } else if (_category == '인생목표') {
+      lifeGoalType = _lifeGoalType;
+      lifeGoalStage = _lifeGoalStage;
+      location = lifeGoalStage;
+    } else {
+      location = _locationController.text.trim();
+      if (location.isEmpty) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('장소를 입력해주세요.')));
+        return;
+      }
     }
+    final resolvedTitle = _category == '건강'
+        ? (healthActivity ?? '건강 계획')
+        : inputTitle;
     Navigator.of(context).pop(
       _PlanRecord(
         id: widget.initialRecord?.id ?? '',
         category: _category,
         startDate: _startDate,
         endDate: _endDate,
-        title: title,
+        title: resolvedTitle,
         location: location,
         description: description,
         country: country,
         city: city,
+        organizationType: organizationType,
+        targetOrganization: targetOrganization,
+        jobRole: jobRole,
+        lifeGoalType: lifeGoalType,
+        lifeGoalStage: lifeGoalStage,
+        healthType: healthType,
+        healthActivity: healthActivity,
+        healthFrequency: healthFrequency,
         highlight: _highlight,
       ),
     );
@@ -1265,12 +1899,32 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
       setState(() {
         _countryOptions = _countryOptionsCache!;
       });
+      if (_selectedCountryApi == null && _selectedCountryDisplay != null) {
+        final target = _selectedCountryDisplay!.trim();
+        final targetNorm = _countryNorm(target);
+        final hit = _countryOptions.firstWhere(
+          (c) =>
+              c.displayName == target ||
+              c.apiName == target ||
+              _countryNorm(c.displayName) == targetNorm ||
+              _countryNorm(c.apiName) == targetNorm,
+          orElse: () => const _CountryOption(
+            apiName: '',
+            displayName: '',
+            regionGroup: 'Other',
+          ),
+        );
+        if (hit.apiName.isNotEmpty) {
+          _selectedCountryApi = hit.apiName;
+          _selectedCountryDisplay = hit.displayName;
+        }
+      }
       if (_selectedCountryApi == null) {
         final korea = _countryOptions.firstWhere(
           (c) =>
               c.apiName == 'South Korea' ||
               c.apiName == 'Korea, Republic of' ||
-              c.displayName == '한국',
+              c.displayName == '대한민국(국내)',
           orElse: () => _countryOptions.isNotEmpty
               ? _countryOptions.first
               : const _CountryOption(
@@ -1284,11 +1938,11 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
           _selectedCountryDisplay = korea.displayName;
         }
       }
-      if (_selectedCountryApi == null && _selectedCountryDisplay != null) {
+      if (_selectedCountryApi != null &&
+          (_selectedCountryDisplay == null ||
+              _selectedCountryDisplay!.isEmpty)) {
         final hit = _countryOptions.firstWhere(
-          (c) =>
-              c.displayName == _selectedCountryDisplay ||
-              c.apiName == _selectedCountryDisplay,
+          (c) => c.apiName == _selectedCountryApi,
           orElse: () => const _CountryOption(
             apiName: '',
             displayName: '',
@@ -1296,12 +1950,8 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
           ),
         );
         if (hit.apiName.isNotEmpty) {
-          _selectedCountryApi = hit.apiName;
           _selectedCountryDisplay = hit.displayName;
         }
-      }
-      if (_selectedCountryApi != null) {
-        await _loadCitiesForCountry(_selectedCountryApi!);
       }
     } catch (_) {
       if (!mounted) {
@@ -1319,43 +1969,37 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
     }
   }
 
-  Future<void> _loadCitiesForCountry(String countryApiName) async {
-    setState(() {
-      _loadingCities = true;
-    });
-    try {
-      if (_cityOptionsCache[countryApiName] == null) {
-        _cityOptionsCache[countryApiName] = await _fetchCities(countryApiName);
-      }
-      if (!mounted) {
-        return;
-      }
-      final cities = _cityOptionsCache[countryApiName]!;
-      final localizedCities = await _translateCitiesToKorean(cities);
-      setState(() {
-        _cityOptions = localizedCities;
-        if (_selectedCity != null && !_cityOptions.contains(_selectedCity)) {
-          _selectedCity = null;
-        }
-      });
-    } catch (_) {
+  Future<void> _searchInstitutions(String query) async {
+    final trimmed = query.trim();
+    final token = ++_institutionSearchToken;
+    if (trimmed.length < 2) {
       if (!mounted) {
         return;
       }
       setState(() {
-        _cityOptions = [];
+        _institutionSuggestions = [];
+        _loadingInstitution = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('도시 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요.')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _loadingCities = false;
-        });
-      }
+      return;
     }
+    setState(() {
+      _loadingInstitution = true;
+    });
+    final items = await InstitutionSearchService.search(
+      query: trimmed,
+      organizationType: _organizationType,
+    );
+    if (!mounted || token != _institutionSearchToken) {
+      return;
+    }
+    setState(() {
+      _institutionSuggestions = items;
+      _loadingInstitution = false;
+    });
   }
+
+  String _countryNorm(String value) =>
+      value.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9가-힣]'), '');
 
   Future<List<_CountryOption>> _fetchCountries() async {
     final uri = Uri.parse(
@@ -1396,7 +2040,7 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
       if (common == 'South Korea' ||
           common == 'Korea, Republic of' ||
           displayName == '대한민국') {
-        displayName = '한국';
+        displayName = '대한민국(국내)';
       }
       options.add(
         _CountryOption(
@@ -1500,10 +2144,13 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
     );
 
     for (final region in _regionOrder) {
-      final regionCountries = _countryOptions
-          .where((c) => c.regionGroup == region && !seen.contains(c.apiName))
-          .toList()
-        ..sort((a, b) => a.displayName.compareTo(b.displayName));
+      final regionCountries =
+          _countryOptions
+              .where(
+                (c) => c.regionGroup == region && !seen.contains(c.apiName),
+              )
+              .toList()
+            ..sort((a, b) => a.displayName.compareTo(b.displayName));
       if (regionCountries.isEmpty) {
         continue;
       }
@@ -1511,169 +2158,14 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
       addCountryItems(regionCountries);
     }
 
-    final rest = _countryOptions
-        .where((c) => !seen.contains(c.apiName))
-        .toList()
-      ..sort((a, b) => a.displayName.compareTo(b.displayName));
+    final rest =
+        _countryOptions.where((c) => !seen.contains(c.apiName)).toList()
+          ..sort((a, b) => a.displayName.compareTo(b.displayName));
     if (rest.isNotEmpty) {
       addHeader(_regionLabel('Other'), 'other');
       addCountryItems(rest);
     }
     return items;
-  }
-
-  Future<List<String>> _fetchCities(String countryApiName) async {
-    String normalize(String value) =>
-        value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-
-    Future<List<String>> fromPost(String countryName) async {
-      final uri = Uri.parse('https://countriesnow.space/api/v0.1/countries/cities');
-      final response = await http.post(
-        uri,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'country': countryName}),
-      );
-      if (response.statusCode != 200) {
-        return [];
-      }
-      final decoded = jsonDecode(response.body);
-      if (decoded is! Map || decoded['data'] is! List) {
-        return [];
-      }
-      return (decoded['data'] as List)
-          .whereType<String>()
-          .map((city) => city.trim())
-          .where((city) => city.isNotEmpty)
-          .toSet()
-          .toList()
-        ..sort();
-    }
-
-    var cities = await fromPost(countryApiName);
-    if (cities.isNotEmpty) {
-      return cities;
-    }
-
-    if (countryApiName == 'South Korea' || countryApiName == 'Korea, Republic of') {
-      const koreaAliases = <String>[
-        'Korea South',
-        'South Korea',
-        'Korea, Republic of',
-        'Republic of Korea',
-        'Korea Republic of',
-      ];
-      for (final alias in koreaAliases) {
-        cities = await fromPost(alias);
-        if (cities.isNotEmpty) {
-          return cities;
-        }
-      }
-    }
-
-    final rawList = await _fetchCountriesNowRaw();
-    final hit = rawList.cast<Map>().firstWhere(
-      (item) {
-        final country = (item['country'] as String?)?.trim() ?? '';
-        if (country.isEmpty) {
-          return false;
-        }
-        if (country.toLowerCase() == countryApiName.toLowerCase()) {
-          return true;
-        }
-        if (normalize(country) == normalize(countryApiName)) {
-          return true;
-        }
-        if ((countryApiName == 'South Korea' ||
-                countryApiName == 'Korea, Republic of') &&
-            (normalize(country) == normalize('korea south') ||
-                normalize(country) == normalize('south korea') ||
-                normalize(country) == normalize('korea republic of') ||
-                normalize(country) == normalize('republic of korea'))) {
-          return true;
-        }
-        return false;
-      },
-      orElse: () => {},
-    );
-    if (hit.isNotEmpty && hit['cities'] is List) {
-      return (hit['cities'] as List)
-          .whereType<String>()
-          .map((city) => city.trim())
-          .where((city) => city.isNotEmpty)
-          .toSet()
-          .toList()
-        ..sort();
-    }
-    return [];
-  }
-
-  Future<List<Map<String, dynamic>>> _fetchCountriesNowRaw() async {
-    if (_countriesNowRawCache != null) {
-      return _countriesNowRawCache!;
-    }
-    final uri = Uri.parse('https://countriesnow.space/api/v0.1/countries');
-    final response = await http.get(uri);
-    if (response.statusCode != 200) {
-      throw Exception('countriesnow-api-failed');
-    }
-    final decoded = jsonDecode(response.body);
-    if (decoded is! Map || decoded['data'] is! List) {
-      throw Exception('countriesnow-api-invalid');
-    }
-    _countriesNowRawCache =
-        (decoded['data'] as List).whereType<Map<String, dynamic>>().toList();
-    return _countriesNowRawCache!;
-  }
-
-  Future<List<String>> _translateCitiesToKorean(List<String> cities) async {
-    final translated = await Future.wait(
-      cities.map((city) => _translateCityToKorean(city)),
-    );
-    return translated.toSet().toList()..sort();
-  }
-
-  Future<String> _translateCityToKorean(String city) async {
-    final trimmed = city.trim();
-    if (trimmed.isEmpty) {
-      return city;
-    }
-    if (RegExp(r'[가-힣]').hasMatch(trimmed)) {
-      return trimmed;
-    }
-    final cached = _cityKoNameCache[trimmed];
-    if (cached != null && cached.isNotEmpty) {
-      return cached;
-    }
-
-    try {
-      final uri = Uri.parse(
-        'https://translate.googleapis.com/translate_a/single'
-        '?client=gtx&sl=auto&tl=ko&dt=t&q=${Uri.encodeQueryComponent(trimmed)}',
-      );
-      final response = await http.get(uri);
-      if (response.statusCode != 200) {
-        _cityKoNameCache[trimmed] = trimmed;
-        return trimmed;
-      }
-      final decoded = jsonDecode(response.body);
-      if (decoded is List &&
-          decoded.isNotEmpty &&
-          decoded[0] is List &&
-          (decoded[0] as List).isNotEmpty &&
-          (decoded[0] as List)[0] is List &&
-          ((decoded[0] as List)[0] as List).isNotEmpty) {
-        final translated = (((decoded[0] as List)[0] as List)[0] as String?)
-                ?.trim() ??
-            trimmed;
-        _cityKoNameCache[trimmed] = translated.isEmpty ? trimmed : translated;
-        return _cityKoNameCache[trimmed]!;
-      }
-    } catch (_) {
-      // Fallback to original city name when translation API fails.
-    }
-
-    _cityKoNameCache[trimmed] = trimmed;
-    return trimmed;
   }
 
   String _formatDate(DateTime date) {
@@ -1685,6 +2177,7 @@ class _AddPlanSheetState extends State<_AddPlanSheet> {
   InputDecoration _fieldDecoration(String hint) {
     return InputDecoration(
       hintText: hint,
+      hintStyle: const TextStyle(color: Color(0xFFB8B8B8), fontSize: 13),
       filled: true,
       fillColor: Colors.white,
       isDense: true,
@@ -1733,17 +2226,27 @@ class _PlanDetailSheet extends StatelessWidget {
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 6),
-            Text(record.yearLabel, style: const TextStyle(color: Color(0xFF8A8A8A))),
+            Text(
+              record.yearLabel,
+              style: const TextStyle(color: Color(0xFF8A8A8A)),
+            ),
             const SizedBox(height: 12),
             Text(record.description),
             const SizedBox(height: 12),
-            Text('장소: ${record.location}'),
+            Text(
+              record.category == '인생목표'
+                  ? '현재 진행 단계: ${record.location}'
+                  : '장소: ${record.location}',
+            ),
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerRight,
               child: Text(
                 record.ddayLabel,
-                style: TextStyle(color: record.accent, fontWeight: FontWeight.w700),
+                style: TextStyle(
+                  color: record.accent,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
           ],

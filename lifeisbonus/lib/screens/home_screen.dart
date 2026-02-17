@@ -13,6 +13,8 @@ import 'kakao_profile_screen.dart';
 import 'naver_profile_screen.dart';
 import 'premium_connect_screen.dart';
 import 'package:lifeisbonus/services/premium_service.dart';
+import 'package:lifeisbonus/utils/institution_alias_store.dart';
+import 'package:lifeisbonus/utils/plan_city_alias_store.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -59,9 +61,13 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     try {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(docId).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(docId)
+          .get();
       final displayName = doc.data()?['displayName'];
-      final hasNickname = displayName is String && displayName.trim().isNotEmpty;
+      final hasNickname =
+          displayName is String && displayName.trim().isNotEmpty;
       if (hasNickname) {
         return;
       }
@@ -91,9 +97,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (context) => const GoogleProfileScreen(),
-      ),
+      MaterialPageRoute(builder: (context) => const GoogleProfileScreen()),
     );
   }
 
@@ -109,8 +113,9 @@ class _HomeScreenState extends State<HomeScreen> {
       const SettingsScreen(),
     ];
     return Scaffold(
-      backgroundColor:
-          isDark ? theme.scaffoldBackgroundColor : const Color(0xFFF7F3FB),
+      backgroundColor: isDark
+          ? theme.scaffoldBackgroundColor
+          : const Color(0xFFF7F3FB),
       body: SafeArea(
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 250),
@@ -148,13 +153,15 @@ class _HomeBodyContent extends StatefulWidget {
 class _HomeBodyContentState extends State<_HomeBodyContent> {
   late Future<_UserMetrics> _metricsFuture = _loadMetrics();
   late Future<String?> _nicknameFuture = _loadNickname();
-  final ValueNotifier<_MatchCounts> _matchCountsNotifier =
-      ValueNotifier(const _MatchCounts());
+  final ValueNotifier<_MatchCounts> _matchCountsNotifier = ValueNotifier(
+    const _MatchCounts(),
+  );
   Future<_MatchCounts>? _matchCountsInFlight;
   _MatchCounts? _lastMatchCounts;
   DateTime? _lastMatchCountsAt;
   int? _targetAgeOverride;
   String? _lastUserDocId;
+  bool _disposed = false;
 
   @override
   void didChangeDependencies() {
@@ -164,8 +171,16 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
 
   @override
   void dispose() {
+    _disposed = true;
     _matchCountsNotifier.dispose();
     super.dispose();
+  }
+
+  void _setMatchCountsSafely(_MatchCounts counts) {
+    if (!mounted || _disposed) {
+      return;
+    }
+    _matchCountsNotifier.value = counts;
   }
 
   Future<void> _refreshIfUserChanged() async {
@@ -191,13 +206,13 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
         cached != null &&
         lastAt != null &&
         now.difference(lastAt).inSeconds < 30) {
-      _matchCountsNotifier.value = cached;
+      _setMatchCountsSafely(cached);
       return;
     }
     final inFlight = _matchCountsInFlight;
     if (inFlight != null) {
       final result = await inFlight;
-      _matchCountsNotifier.value = result;
+      _setMatchCountsSafely(result);
       return;
     }
     final future = _loadMatchCountsInternal().whenComplete(() {
@@ -205,7 +220,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
     });
     _matchCountsInFlight = future;
     final result = await future;
-    _matchCountsNotifier.value = result;
+    _setMatchCountsSafely(result);
   }
 
   @override
@@ -287,13 +302,17 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
       return null;
     }
     try {
-      final doc =
-          await FirebaseFirestore.instance.collection('users').doc(docId).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(docId)
+          .get();
       final displayName = doc.data()?['displayName'];
       if (displayName is String && displayName.trim().isNotEmpty) {
         return displayName.trim();
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[match-count] plan error: $e');
+    }
     return null;
   }
 
@@ -301,12 +320,25 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
     final prefs = await SharedPreferences.getInstance();
     final provider = prefs.getString('lastProvider');
     final providerId = prefs.getString('lastProviderId');
+    final authUser = FirebaseAuth.instance.currentUser;
+    if (authUser != null) {
+      final providerIds = authUser.providerData
+          .map((item) => item.providerId)
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      final isEmailOrGoogle =
+          providerIds.contains('password') ||
+          providerIds.contains('google.com') ||
+          providerIds.contains('apple.com');
+      if (isEmailOrGoogle) {
+        return authUser.uid;
+      }
+    }
     if ((provider == 'kakao' || provider == 'naver') &&
         providerId != null &&
         providerId.isNotEmpty) {
       return '$provider:$providerId';
     }
-    final authUser = FirebaseAuth.instance.currentUser;
     if (authUser != null) {
       return authUser.uid;
     }
@@ -317,7 +349,10 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
   }
 
   Future<DateTime?> _fetchBirthDate(String collection, String docId) async {
-    final doc = await FirebaseFirestore.instance.collection(collection).doc(docId).get();
+    final doc = await FirebaseFirestore.instance
+        .collection(collection)
+        .doc(docId)
+        .get();
     final data = doc.data();
     final birthDateValue = data?['birthDate'];
     if (birthDateValue is String) {
@@ -328,7 +363,8 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
 
   int _calculateAge(DateTime birthDate, DateTime now) {
     var age = now.year - birthDate.year;
-    final hasBirthdayPassed = (now.month > birthDate.month) ||
+    final hasBirthdayPassed =
+        (now.month > birthDate.month) ||
         (now.month == birthDate.month && now.day >= birthDate.day);
     if (!hasBirthdayPassed) {
       age -= 1;
@@ -356,9 +392,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
     });
   }
 
-  Future<_UserMetrics> _applyOverrides({
-    int? targetAge,
-  }) async {
+  Future<_UserMetrics> _applyOverrides({int? targetAge}) async {
     final prefs = await SharedPreferences.getInstance();
     if (targetAge != null) {
       await prefs.setInt('targetAge', targetAge);
@@ -368,6 +402,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
 
   Future<_MatchCounts> _loadMatchCountsInternal() async {
     final userDocId = await _resolveUserDocId();
+    debugPrint('[match-count] resolved userDocId=$userDocId');
     if (userDocId == null) {
       const empty = _MatchCounts();
       _lastMatchCounts = empty;
@@ -381,11 +416,15 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
       QuerySnapshot<Map<String, dynamic>> snapshot,
       String key,
     ) async {
-      final users = snapshot.docs.map((doc) {
-        final ownerId = doc.data()['ownerId'] as String?;
-        final parentId = doc.reference.parent.parent?.id;
-        return ownerId ?? parentId;
-      }).whereType<String>().where((id) => id != userDocId).toSet();
+      final users = snapshot.docs
+          .map((doc) {
+            final ownerId = doc.data()['ownerId'] as String?;
+            final parentId = doc.reference.parent.parent?.id;
+            return ownerId ?? parentId;
+          })
+          .whereType<String>()
+          .where((id) => id != userDocId)
+          .toSet();
       counts[key] = users.length;
       uniqueUsers.addAll(users);
     }
@@ -500,10 +539,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
             continue;
           }
           recordsByKey.putIfAbsent(matchKey, () => <Map<String, int>>[]);
-          recordsByKey[matchKey]!.add({
-            'start': startYear,
-            'end': endYear,
-          });
+          recordsByKey[matchKey]!.add({'start': startYear, 'end': endYear});
         }
         if (recordsByKey.isNotEmpty) {
           var matchCount = 0;
@@ -531,12 +567,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
               for (final range in ranges) {
                 final rangeStart = range['start']!;
                 final rangeEnd = range['end']!;
-                if (_rangesOverlap(
-                  rangeStart,
-                  rangeEnd,
-                  startYear,
-                  endYear,
-                )) {
+                if (_rangesOverlap(rangeStart, rangeEnd, startYear, endYear)) {
                   overlaps = true;
                   break;
                 }
@@ -556,26 +587,248 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
     try {
       final now = DateTime.now();
       final today = DateTime(now.year, now.month, now.day);
-      final upcomingPlan = await FirebaseFirestore.instance
+      Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>?
+      fallbackAllPlansFuture;
+      Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+      loadFallbackAllPlans() {
+        fallbackAllPlansFuture ??= (() async {
+          final usersSnap = await FirebaseFirestore.instance
+              .collection('users')
+              .get();
+          final docs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+          for (final user in usersSnap.docs) {
+            final plansSnap = await user.reference.collection('plans').get();
+            docs.addAll(plansSnap.docs);
+          }
+          return docs;
+        })();
+        return fallbackAllPlansFuture!;
+      }
+
+      final allPlanSnapshot = await FirebaseFirestore.instance
           .collection('users')
           .doc(userDocId)
           .collection('plans')
-          .where('endDate', isGreaterThanOrEqualTo: today)
-          .orderBy('endDate')
-          .limit(1)
           .get();
-      if (upcomingPlan.docs.isNotEmpty) {
-        final data = upcomingPlan.docs.first.data();
-        final matchKey = data['matchKey'] as String?;
-        if (matchKey != null && matchKey.isNotEmpty) {
-          final snap = await FirebaseFirestore.instance
-              .collectionGroup('plans')
-              .where('matchKey', isEqualTo: matchKey)
-              .get();
-          await applyCount(snap, 'plan');
+      debugPrint('[match-count] plans total=${allPlanSnapshot.docs.length}');
+      final upcomingPlanDocs = allPlanSnapshot.docs.where((doc) {
+        final end = _parseDateValue(doc.data()['endDate']);
+        return end != null && !end.isBefore(today);
+      }).toList();
+      debugPrint(
+        '[match-count] plans active=${upcomingPlanDocs.length} today=$today',
+      );
+      if (upcomingPlanDocs.isNotEmpty) {
+        final allPlanUsers = <String>{};
+        final allPlanMatches = <String>{};
+        List<QueryDocumentSnapshot<Map<String, dynamic>>>? travelPool;
+        List<QueryDocumentSnapshot<Map<String, dynamic>>>? careerPool;
+        for (final doc in upcomingPlanDocs) {
+          final myPlanId = doc.id;
+          final data = doc.data();
+          final myStart = _parseDateValue(data['startDate']);
+          final myEnd = _parseDateValue(data['endDate']);
+          final myCategory = data['category']?.toString() ?? '';
+          final myTravelNorm = _extractTravelNorms(data);
+          final myCountryNorm = myTravelNorm.countryNorm;
+          final myCityNorm = myTravelNorm.cityNorm;
+          final computedMatchKey = _buildPlanMatchKeyFromData(data);
+          final storedMatchKey = data['matchKey'] as String?;
+          final legacyMatchKey = _buildLegacyTravelPlanMatchKeyFromData(data);
+          final queryKeys = <String>{
+            if (computedMatchKey != null && computedMatchKey.isNotEmpty)
+              computedMatchKey,
+            if (storedMatchKey != null && storedMatchKey.isNotEmpty)
+              storedMatchKey,
+            if (legacyMatchKey != null && legacyMatchKey.isNotEmpty)
+              legacyMatchKey,
+          };
+          debugPrint(
+            '[match-count] my plan id=${doc.id} cat=$myCategory countryNorm=$myCountryNorm cityNorm=$myCityNorm start=$myStart end=$myEnd keys=$queryKeys',
+          );
+          if (computedMatchKey != null &&
+              computedMatchKey.isNotEmpty &&
+              computedMatchKey != storedMatchKey) {
+            final countryNorm = myCountryNorm;
+            final cityNorm = myCityNorm;
+            try {
+              await doc.reference.set({
+                'matchKey': computedMatchKey,
+                'countryNorm': countryNorm,
+                'cityNorm': cityNorm,
+                'ownerId': userDocId,
+                'updatedAt': FieldValue.serverTimestamp(),
+              }, SetOptions(merge: true));
+            } catch (e) {
+              debugPrint('[match-count] matchKey backfill skip: $e');
+            }
+          }
+          for (final key in queryKeys) {
+            List<QueryDocumentSnapshot<Map<String, dynamic>>> planDocs;
+            try {
+              final snap = await FirebaseFirestore.instance
+                  .collectionGroup('plans')
+                  .where('matchKey', isEqualTo: key)
+                  .get();
+              planDocs = snap.docs;
+              debugPrint(
+                '[match-count] query key=$key docs=${snap.docs.length}',
+              );
+            } catch (e) {
+              final fallbackDocs = await loadFallbackAllPlans();
+              planDocs = fallbackDocs.where((d) {
+                final mk = d.data()['matchKey']?.toString() ?? '';
+                return mk == key;
+              }).toList();
+              debugPrint(
+                '[match-count] query key=$key fallback docs=${planDocs.length} error=$e',
+              );
+            }
+            for (final matchDoc in planDocs) {
+              final ownerId = matchDoc.data()['ownerId'] as String?;
+              final parentId = matchDoc.reference.parent.parent?.id;
+              final resolvedId = ownerId ?? parentId;
+              if (resolvedId == null || resolvedId == userDocId) {
+                continue;
+              }
+              final otherStart = _parseDateValue(matchDoc.data()['startDate']);
+              final otherEnd = _parseDateValue(matchDoc.data()['endDate']);
+              if (otherEnd == null || otherEnd.isBefore(today)) {
+                continue;
+              }
+              if (myStart != null &&
+                  myEnd != null &&
+                  otherStart != null &&
+                  !_dateRangesOverlap(myStart, myEnd, otherStart, otherEnd)) {
+                continue;
+              }
+              allPlanUsers.add(resolvedId);
+              allPlanMatches.add('$myPlanId|$resolvedId|${matchDoc.id}');
+            }
+          }
+          if (myCategory == '여행' &&
+              myCountryNorm.isNotEmpty &&
+              myCityNorm.isNotEmpty &&
+              myStart != null &&
+              myEnd != null) {
+            if (travelPool == null) {
+              try {
+                travelPool =
+                    (await FirebaseFirestore.instance
+                            .collectionGroup('plans')
+                            .where('category', isEqualTo: '여행')
+                            .get())
+                        .docs;
+              } catch (e) {
+                final fallbackDocs = await loadFallbackAllPlans();
+                travelPool = fallbackDocs.where((d) {
+                  return (d.data()['category']?.toString() ?? '') == '여행';
+                }).toList();
+                debugPrint(
+                  '[match-count] travel fallback source docs=${travelPool.length} error=$e',
+                );
+              }
+            }
+            final travelDocs = travelPool!;
+            for (final matchDoc in travelDocs) {
+              final ownerId = matchDoc.data()['ownerId'] as String?;
+              final parentId = matchDoc.reference.parent.parent?.id;
+              final resolvedId = ownerId ?? parentId;
+              if (resolvedId == null || resolvedId == userDocId) {
+                continue;
+              }
+              final otherTravelNorm = _extractTravelNorms(matchDoc.data());
+              final otherCountryNorm = otherTravelNorm.countryNorm;
+              final otherCityNorm = otherTravelNorm.cityNorm;
+              if (otherCountryNorm != myCountryNorm ||
+                  otherCityNorm != myCityNorm) {
+                continue;
+              }
+              final otherStart = _parseDateValue(matchDoc.data()['startDate']);
+              final otherEnd = _parseDateValue(matchDoc.data()['endDate']);
+              if (otherStart == null || otherEnd == null) {
+                continue;
+              }
+              if (otherEnd.isBefore(today)) {
+                continue;
+              }
+              if (_dateRangesOverlap(myStart, myEnd, otherStart, otherEnd)) {
+                allPlanUsers.add(resolvedId);
+                allPlanMatches.add('$myPlanId|$resolvedId|${matchDoc.id}');
+              }
+            }
+            debugPrint(
+              '[match-count] travel fallback pool=${travelDocs.length} users=${allPlanUsers.length} matches=${allPlanMatches.length}',
+            );
+          }
+          if (myCategory == '이직' && myStart != null && myEnd != null) {
+            final myTypeNorm = _normalizeMatchValue(
+              data['organizationType']?.toString() ?? '',
+            );
+            final myOrgNorm = InstitutionAliasStore.instance.normalize(
+              data['targetOrganization']?.toString() ?? '',
+            );
+            if (myTypeNorm.isEmpty || myOrgNorm.isEmpty) {
+              continue;
+            }
+            if (careerPool == null) {
+              try {
+                careerPool =
+                    (await FirebaseFirestore.instance
+                            .collectionGroup('plans')
+                            .where('category', isEqualTo: '이직')
+                            .get())
+                        .docs;
+              } catch (e) {
+                final fallbackDocs = await loadFallbackAllPlans();
+                careerPool = fallbackDocs.where((d) {
+                  return (d.data()['category']?.toString() ?? '') == '이직';
+                }).toList();
+                debugPrint(
+                  '[match-count] career fallback source docs=${careerPool.length} error=$e',
+                );
+              }
+            }
+            for (final matchDoc in careerPool) {
+              final ownerId = matchDoc.data()['ownerId'] as String?;
+              final parentId = matchDoc.reference.parent.parent?.id;
+              final resolvedId = ownerId ?? parentId;
+              if (resolvedId == null || resolvedId == userDocId) {
+                continue;
+              }
+              final otherTypeNorm = _normalizeMatchValue(
+                matchDoc.data()['organizationType']?.toString() ?? '',
+              );
+              final otherOrgNorm = InstitutionAliasStore.instance.normalize(
+                matchDoc.data()['targetOrganization']?.toString() ?? '',
+              );
+              if (otherTypeNorm != myTypeNorm || otherOrgNorm != myOrgNorm) {
+                continue;
+              }
+              final otherStart = _parseDateValue(matchDoc.data()['startDate']);
+              final otherEnd = _parseDateValue(matchDoc.data()['endDate']);
+              if (otherStart == null || otherEnd == null) {
+                continue;
+              }
+              if (otherEnd.isBefore(today)) {
+                continue;
+              }
+              if (_dateRangesOverlap(myStart, myEnd, otherStart, otherEnd)) {
+                allPlanUsers.add(resolvedId);
+                allPlanMatches.add('$myPlanId|$resolvedId|${matchDoc.id}');
+              }
+            }
+          }
         }
+        counts['plan'] = allPlanMatches.length;
+        debugPrint(
+          '[match-count] final similarPlan=${allPlanMatches.length} (users=${allPlanUsers.length})',
+        );
+        uniqueUsers.addAll(allPlanUsers);
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[match-count] plan error: $e');
+    }
 
     try {
       final latestMemory = await FirebaseFirestore.instance
@@ -615,7 +868,165 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
   }
 
   String _normalizeMatchValue(String value) {
-    return value.trim().toLowerCase().replaceAll(' ', '').replaceAll('-', '');
+    return value.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9가-힣]'), '');
+  }
+
+  String? _buildPlanMatchKeyFromData(Map<String, dynamic> data) {
+    final start = data['startDate'];
+    DateTime? startDate;
+    if (start is Timestamp) {
+      startDate = start.toDate();
+    } else if (start is DateTime) {
+      startDate = start;
+    } else if (start is String) {
+      startDate = DateTime.tryParse(start);
+    }
+    if (startDate == null) {
+      return null;
+    }
+    final category = data['category']?.toString() ?? '';
+    if (category == '여행') {
+      final travelNorm = _extractTravelNorms(data);
+      final countryNorm = travelNorm.countryNorm;
+      final cityNorm = travelNorm.cityNorm;
+      if (countryNorm.isNotEmpty && cityNorm.isNotEmpty) {
+        return 'travel|$countryNorm|$cityNorm';
+      }
+    }
+    if (category == '이직') {
+      final typeNorm = _normalizeMatchValue(
+        data['organizationType']?.toString() ?? '',
+      );
+      final orgNorm = InstitutionAliasStore.instance.normalize(
+        data['targetOrganization']?.toString() ?? '',
+      );
+      if (typeNorm.isNotEmpty && orgNorm.isNotEmpty) {
+        return 'careerchange|$typeNorm|$orgNorm';
+      }
+    }
+    if (category == '건강') {
+      final typeNorm = _normalizeMatchValue(
+        data['healthType']?.toString() ?? '',
+      );
+      if (typeNorm.isNotEmpty) {
+        return 'health|$typeNorm';
+      }
+    }
+    if (category == '인생목표') {
+      final lifeGoalNorm = _normalizeMatchValue(
+        data['lifeGoalType']?.toString() ?? '',
+      );
+      if (lifeGoalNorm.isNotEmpty) {
+        return 'lifegoal|$lifeGoalNorm';
+      }
+    }
+    final location = _normalizeMatchValue(data['location']?.toString() ?? '');
+    if (location.isEmpty) {
+      return null;
+    }
+    return '${startDate.year}|$category|$location';
+  }
+
+  String? _buildLegacyTravelPlanMatchKeyFromData(Map<String, dynamic> data) {
+    final category = data['category']?.toString() ?? '';
+    if (category != '여행') {
+      return null;
+    }
+    final start = _parseDateValue(data['startDate']);
+    if (start == null) {
+      return null;
+    }
+    final travelNorm = _extractTravelNorms(data);
+    final countryNorm = travelNorm.countryNorm;
+    final cityNorm = travelNorm.cityNorm;
+    if (countryNorm.isEmpty || cityNorm.isEmpty) {
+      return null;
+    }
+    return '${start.year}|travel|$countryNorm|$cityNorm';
+  }
+
+  _TravelNorm _extractTravelNorms(Map<String, dynamic> data) {
+    var countryNorm = _normalizePlanCountry(data['country']?.toString() ?? '');
+    var cityNorm = _normalizePlanCity(data['city']?.toString() ?? '');
+    if (countryNorm.isNotEmpty && cityNorm.isNotEmpty) {
+      return _TravelNorm(countryNorm: countryNorm, cityNorm: cityNorm);
+    }
+    final location = data['location']?.toString() ?? '';
+    if (location.isNotEmpty && location.contains('/')) {
+      final parts = location.split('/');
+      if (parts.length >= 2) {
+        countryNorm = _normalizePlanCountry(parts.first.trim());
+        cityNorm = _normalizePlanCity(parts.sublist(1).join('/').trim());
+      }
+    }
+    return _TravelNorm(countryNorm: countryNorm, cityNorm: cityNorm);
+  }
+
+  String _normalizePlanCountry(String value) {
+    final normalized = _normalizeMatchValue(value);
+    const aliases = {
+      '한국': 'southkorea',
+      '대한민국': 'southkorea',
+      '대한민국국내': 'southkorea',
+      'southkorea': 'southkorea',
+      'korearepublicof': 'southkorea',
+      'republicofkorea': 'southkorea',
+      '일본': 'japan',
+      '일본국': 'japan',
+      'japan': 'japan',
+      '미국': 'usa',
+      '미합중국': 'usa',
+      'unitedstates': 'usa',
+      'usa': 'usa',
+      '중국': 'china',
+      '중화인민공화국': 'china',
+      'china': 'china',
+    };
+    return aliases[normalized] ?? normalized;
+  }
+
+  DateTime? _parseDateValue(dynamic value) {
+    if (value is Timestamp) {
+      final date = value.toDate().toLocal();
+      return DateTime(date.year, date.month, date.day);
+    }
+    if (value is DateTime) {
+      final date = value.toLocal();
+      return DateTime(date.year, date.month, date.day);
+    }
+    if (value is String) {
+      final parsed = DateTime.tryParse(value);
+      if (parsed != null) {
+        final date = parsed.toLocal();
+        return DateTime(date.year, date.month, date.day);
+      }
+    }
+    return null;
+  }
+
+  bool _dateRangesOverlap(
+    DateTime startA,
+    DateTime endA,
+    DateTime startB,
+    DateTime endB,
+  ) {
+    final aStart = startA.isBefore(endA) || startA.isAtSameMomentAs(endA)
+        ? startA
+        : endA;
+    final aEnd = startA.isBefore(endA) || startA.isAtSameMomentAs(endA)
+        ? endA
+        : startA;
+    final bStart = startB.isBefore(endB) || startB.isAtSameMomentAs(endB)
+        ? startB
+        : endB;
+    final bEnd = startB.isBefore(endB) || startB.isAtSameMomentAs(endB)
+        ? endB
+        : startB;
+    return !aEnd.isBefore(bStart) && !bEnd.isBefore(aStart);
+  }
+
+  String _normalizePlanCity(String value) {
+    return PlanCityAliasStore.instance.normalize(value);
   }
 
   String _normalizeProvince(String value) {
@@ -623,16 +1034,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
     if (normalized.isEmpty) {
       return normalized;
     }
-    const suffixes = [
-      '특별자치시',
-      '특별자치도',
-      '광역시',
-      '특별시',
-      '자치시',
-      '자치도',
-      '도',
-      '시',
-    ];
+    const suffixes = ['특별자치시', '특별자치도', '광역시', '특별시', '자치시', '자치도', '도', '시'];
     for (final suffix in suffixes) {
       if (normalized.endsWith(suffix)) {
         normalized = normalized.substring(0, normalized.length - suffix.length);
@@ -786,10 +1188,7 @@ class _TodayBonusCard extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(20),
         gradient: const LinearGradient(
-          colors: [
-            Color(0xFFB356FF),
-            Color(0xFFFF4FA6),
-          ],
+          colors: [Color(0xFFB356FF), Color(0xFFFF4FA6)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -849,10 +1248,7 @@ class _TodayBonusCard extends StatelessWidget {
           const SizedBox(height: 8),
           const Text(
             '매일은 소중한 선물입니다. 오늘도 즐겁게 보내세요!',
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 12,
-            ),
+            style: TextStyle(color: Colors.white70, fontSize: 12),
           ),
           const SizedBox(height: 12),
           Container(
@@ -926,9 +1322,21 @@ class _RemainingBonusCard extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _StatItem(label: '지난 년수', value: ageLabel, color: const Color(0xFFB356FF)),
-              _StatItem(label: '남은 년수', value: remainingYears, color: const Color(0xFFFF4FA6)),
-              _StatItem(label: '진행률', value: progressLabel, color: const Color(0xFF6A6A6A)),
+              _StatItem(
+                label: '지난 년수',
+                value: ageLabel,
+                color: const Color(0xFFB356FF),
+              ),
+              _StatItem(
+                label: '남은 년수',
+                value: remainingYears,
+                color: const Color(0xFFFF4FA6),
+              ),
+              _StatItem(
+                label: '진행률',
+                value: progressLabel,
+                color: const Color(0xFF6A6A6A),
+              ),
             ],
           ),
           const SizedBox(height: 18),
@@ -986,7 +1394,9 @@ class _RemainingBonusCard extends StatelessWidget {
                 style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
               ),
               const Spacer(),
-              _CurrentAgeBadge(label: metrics.age == null ? '현재 --세' : '현재 ${metrics.age}세'),
+              _CurrentAgeBadge(
+                label: metrics.age == null ? '현재 --세' : '현재 ${metrics.age}세',
+              ),
               const Spacer(),
               Text(
                 metrics.targetYear == null
@@ -1012,8 +1422,9 @@ class _LifeJourneyCard extends StatelessWidget {
     final ageLabel = metrics.age?.toString() ?? '--';
     final livedDays = metrics.livedDays;
     final remainingDays = metrics.remainingDays;
-    final remainingYearsLabel =
-        metrics.remainingYears == null ? '--' : metrics.remainingYears!.toString();
+    final remainingYearsLabel = metrics.remainingYears == null
+        ? '--'
+        : metrics.remainingYears!.toString();
     final age = metrics.age ?? -1;
     final stageInfo = _stageForAge(age);
     final progressText = livedDays == null || remainingDays == null
@@ -1116,7 +1527,10 @@ class _LifeJourneyCard extends StatelessWidget {
                 : RichText(
                     textAlign: TextAlign.center,
                     text: TextSpan(
-                      style: const TextStyle(fontSize: 11, color: Color(0xFF8A8A8A)),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF8A8A8A),
+                      ),
                       children: [
                         const TextSpan(text: '현재 '),
                         TextSpan(
@@ -1193,20 +1607,14 @@ class _PeopleCard extends StatelessWidget {
             ),
             child: Column(
               children: [
-                _PeopleRow(
-                  label: '같은 학교 출신',
-                  value: '${counts.sameSchool}명',
-                ),
+                _PeopleRow(label: '같은 학교 출신', value: '${counts.sameSchool}명'),
                 const SizedBox(height: 8),
                 _PeopleRow(
                   label: '같은 동네 거주',
                   value: '${counts.sameNeighborhood}명',
                 ),
                 const SizedBox(height: 8),
-                _PeopleRow(
-                  label: '비슷한 계획',
-                  value: '${counts.similarPlan}명',
-                ),
+                _PeopleRow(label: '비슷한 계획', value: '${counts.similarPlan}명'),
               ],
             ),
           ),
@@ -1222,8 +1630,8 @@ class _PeopleCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                   onTap: () {
                     if (isPremium) {
-                      final homeState =
-                          context.findAncestorStateOfType<_HomeScreenState>();
+                      final homeState = context
+                          .findAncestorStateOfType<_HomeScreenState>();
                       if (homeState != null) {
                         homeState.setState(() {
                           homeState._currentIndex = 3;
@@ -1252,7 +1660,9 @@ class _PeopleCard extends StatelessWidget {
                     ),
                     child: Center(
                       child: Text(
-                        isPremium ? '프리미엄 이용 중 입니다' : '프리미엄으로 연결하기',
+                        isPremium
+                            ? '프리미엄 이용 중 입니다'
+                            : '월 9,900원으로 소중한 인연 만들기',
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
@@ -1386,10 +1796,7 @@ class _AgePicker extends StatelessWidget {
 }
 
 class _AgeIconButton extends StatelessWidget {
-  const _AgeIconButton({
-    required this.icon,
-    this.onPressed,
-  });
+  const _AgeIconButton({required this.icon, this.onPressed});
 
   final IconData icon;
   final VoidCallback? onPressed;
@@ -1513,13 +1920,19 @@ class _JourneyRingState extends State<_JourneyRing>
                   Text(
                     widget.livedDaysText,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 10, color: Color(0xFF7A7A7A)),
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFF7A7A7A),
+                    ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     widget.remainingText,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 10, color: Color(0xFFFF5A4E)),
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFFFF5A4E),
+                    ),
                   ),
                 ],
               ),
@@ -1719,7 +2132,9 @@ class _StageRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final borderColor = highlight ? const Color(0xFFC8A6FF) : Colors.transparent;
+    final borderColor = highlight
+        ? const Color(0xFFC8A6FF)
+        : Colors.transparent;
     final progressGradient = highlight
         ? const LinearGradient(colors: [Color(0xFFB356FF), Color(0xFFFF4FA6)])
         : const LinearGradient(colors: [Color(0xFF9CA3AF), Color(0xFF9CA3AF)]);
@@ -1740,7 +2155,10 @@ class _StageRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: chipColor,
                       borderRadius: BorderRadius.circular(999),
@@ -1757,13 +2175,20 @@ class _StageRow extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     range,
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF9B9B9B),
+                    ),
                   ),
                 ],
               ),
               const Spacer(),
               if (active)
-                const Icon(Icons.check_circle, color: Color(0xFF27C068), size: 16)
+                const Icon(
+                  Icons.check_circle,
+                  color: Color(0xFF27C068),
+                  size: 16,
+                )
               else if (highlight)
                 const Icon(Icons.circle, color: Color(0xFFB356FF), size: 10),
             ],
@@ -1843,11 +2268,15 @@ class _MatchCounts {
   final int similarPlan;
 }
 
+class _TravelNorm {
+  const _TravelNorm({required this.countryNorm, required this.cityNorm});
+
+  final String countryNorm;
+  final String cityNorm;
+}
+
 class _HomeBottomNav extends StatelessWidget {
-  const _HomeBottomNav({
-    required this.currentIndex,
-    required this.onTap,
-  });
+  const _HomeBottomNav({required this.currentIndex, required this.onTap});
 
   final int currentIndex;
   final ValueChanged<int> onTap;
@@ -1929,15 +2358,17 @@ class _NavItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final activeColor =
-        isDark ? theme.colorScheme.primary : const Color(0xFFFF7A3D);
-    final inactiveColor =
-        isDark ? theme.colorScheme.onSurface.withOpacity(0.5) : const Color(0xFFB0B0B0);
+    final activeColor = isDark
+        ? theme.colorScheme.primary
+        : const Color(0xFFFF7A3D);
+    final inactiveColor = isDark
+        ? theme.colorScheme.onSurface.withOpacity(0.5)
+        : const Color(0xFFB0B0B0);
     final color = active ? activeColor : inactiveColor;
     final bgColor = active
         ? (isDark
-            ? theme.colorScheme.primary.withOpacity(0.16)
-            : const Color(0xFFFFF0E6))
+              ? theme.colorScheme.primary.withOpacity(0.16)
+              : const Color(0xFFFFF0E6))
         : Colors.transparent;
     return InkWell(
       onTap: onTap,
