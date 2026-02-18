@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -8,11 +10,15 @@ import 'record_screen.dart';
 import 'plan_screen.dart';
 import 'message_screen.dart';
 import 'settings_screen.dart';
+import 'message_chat_screen.dart';
 import 'google_profile_screen.dart';
 import 'kakao_profile_screen.dart';
 import 'naver_profile_screen.dart';
 import 'premium_connect_screen.dart';
+import 'package:lifeisbonus/services/app_settings_service.dart';
 import 'package:lifeisbonus/services/premium_service.dart';
+import 'package:lifeisbonus/services/match_count_service.dart';
+import 'package:lifeisbonus/services/push_notification_service.dart';
 import 'package:lifeisbonus/utils/institution_alias_store.dart';
 import 'package:lifeisbonus/utils/plan_city_alias_store.dart';
 
@@ -25,13 +31,195 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
+  int _messageAutoOpenToken = 0;
   bool _checkedNickname = false;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _threadSubscription;
+  StreamSubscription<ChatOpenPayload>? _pushOpenSubscription;
+  VoidCallback? _alertsSettingListener;
+  String? _watchingUserDocId;
+  bool _alertsEnabled = true;
+  int? _lastUnreadTotal;
+  bool _seededUnread = false;
 
   @override
   void initState() {
     super.initState();
+    _initMessageAlertWatcher();
+    _bindPushOpenEvents();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _ensureNickname();
+    });
+  }
+
+  @override
+  void dispose() {
+    _threadSubscription?.cancel();
+    _pushOpenSubscription?.cancel();
+    final listener = _alertsSettingListener;
+    if (listener != null) {
+      AppSettingsService.alertsEnabled.removeListener(listener);
+    }
+    super.dispose();
+  }
+
+  Future<void> _initMessageAlertWatcher() async {
+    await AppSettingsService.ensureLoaded();
+    if (!mounted) {
+      return;
+    }
+    _alertsEnabled = AppSettingsService.alertsEnabled.value;
+    _alertsSettingListener = () {
+      _alertsEnabled = AppSettingsService.alertsEnabled.value;
+    };
+    AppSettingsService.alertsEnabled.addListener(_alertsSettingListener!);
+    await _restartMessageAlertWatcher();
+  }
+
+  Future<void> _bindPushOpenEvents() async {
+    await PushNotificationService.initialize();
+    if (!mounted) {
+      return;
+    }
+    final initialPayload = PushNotificationService.consumeInitialOpenChat();
+    if (initialPayload != null) {
+      _openChatFromPush(initialPayload);
+    }
+    await _pushOpenSubscription?.cancel();
+    _pushOpenSubscription = PushNotificationService.onOpenChat.listen((
+      payload,
+    ) {
+      _openChatFromPush(payload);
+    });
+  }
+
+  Future<void> _openChatFromPush(ChatOpenPayload payload) async {
+    if (!mounted) {
+      return;
+    }
+    final myUserDocId = await PremiumService.resolveUserDocId();
+    if (!mounted || myUserDocId == null) {
+      return;
+    }
+    try {
+      final threadDoc = await FirebaseFirestore.instance
+          .collection('threads')
+          .doc(payload.threadId)
+          .get();
+      final data = threadDoc.data();
+      final participants =
+          (data?['participants'] as List?)
+              ?.map((e) => e.toString())
+              .where((e) => e.isNotEmpty)
+              .toSet() ??
+          <String>{};
+      final validThread = threadDoc.exists &&
+          participants.contains(myUserDocId) &&
+          participants.contains(payload.senderId);
+      if (!validThread) {
+        return;
+      }
+    } catch (_) {
+      return;
+    }
+
+    String nickname = payload.senderName?.trim().isNotEmpty == true
+        ? payload.senderName!.trim()
+        : '알 수 없음';
+    String? photoUrl;
+    try {
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(payload.senderId)
+          .get();
+      final data = userDoc.data();
+      final displayName = data?['displayName']?.toString().trim();
+      final photo = data?['photoUrl']?.toString().trim();
+      if (displayName != null && displayName.isNotEmpty) {
+        nickname = displayName;
+      }
+      if (photo != null && photo.isNotEmpty) {
+        photoUrl = photo;
+      }
+    } catch (_) {}
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _currentIndex = 3;
+    });
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => MessageChatScreen(
+          otherUserId: payload.senderId,
+          otherNickname: nickname,
+          otherPhotoUrl: photoUrl,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _restartMessageAlertWatcher() async {
+    final userDocId = await PremiumService.resolveUserDocId();
+    if (!mounted) {
+      return;
+    }
+    if (userDocId == null) {
+      await _threadSubscription?.cancel();
+      _threadSubscription = null;
+      _watchingUserDocId = null;
+      _lastUnreadTotal = null;
+      _seededUnread = false;
+      return;
+    }
+    if (_watchingUserDocId == userDocId && _threadSubscription != null) {
+      return;
+    }
+    await _threadSubscription?.cancel();
+    _watchingUserDocId = userDocId;
+    _lastUnreadTotal = null;
+    _seededUnread = false;
+    _threadSubscription = FirebaseFirestore.instance
+        .collection('threads')
+        .where('participants', arrayContains: userDocId)
+        .snapshots()
+        .listen((snapshot) {
+      if (!mounted) {
+        return;
+      }
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      var unreadTotal = 0;
+      for (final doc in snapshot.docs) {
+        unreadTotal += _resolveThreadUnreadCount(doc.data(), userDocId);
+      }
+      if (unreadTotal <= 0 || _currentIndex == 3) {
+        messenger?.hideCurrentSnackBar();
+      }
+      final previous = _lastUnreadTotal ?? 0;
+      if (!_seededUnread) {
+        _seededUnread = true;
+      } else if (_alertsEnabled && _currentIndex != 3 && unreadTotal > previous) {
+        messenger?.hideCurrentSnackBar();
+        messenger?.showSnackBar(
+          SnackBar(
+            content: const Text('새 쪽지가 도착했어요.'),
+            behavior: SnackBarBehavior.floating,
+            action: SnackBarAction(
+              label: '보기',
+              onPressed: () {
+                if (!mounted) {
+                  return;
+                }
+                ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+                setState(() {
+                  _currentIndex = 3;
+                  _messageAutoOpenToken += 1;
+                });
+              },
+            ),
+          ),
+        );
+      }
+      _lastUnreadTotal = unreadTotal;
     });
   }
 
@@ -59,6 +247,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (docId == null) {
       return;
     }
+    await _restartMessageAlertWatcher();
 
     try {
       final doc = await FirebaseFirestore.instance
@@ -109,7 +298,7 @@ class _HomeScreenState extends State<HomeScreen> {
       const _HomeBody(),
       const RecordScreen(),
       const PlanScreen(),
-      const MessageScreen(),
+      MessageScreen(openLatestUnreadToken: _messageAutoOpenToken),
       const SettingsScreen(),
     ];
     return Scaffold(
@@ -194,6 +383,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
         _metricsFuture = _loadMetrics();
         _nicknameFuture = _loadNickname();
       });
+      await PushNotificationService.initialize();
       await _refreshMatchCounts(force: true);
     }
   }
@@ -410,7 +600,14 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
       return empty;
     }
     final counts = <String, int>{};
+    MatchAggregate? aggregateCounts;
     final uniqueUsers = <String>{};
+
+    try {
+      aggregateCounts = await MatchCountService().loadForUser(userDocId);
+    } catch (e) {
+      debugPrint('[match-count] aggregate preload error: $e');
+    }
 
     Future<void> applyCount(
       QuerySnapshot<Map<String, dynamic>> snapshot,
@@ -436,7 +633,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
         .orderBy('updatedAt', descending: true)
         .get();
     if (schoolSnapshot.docs.isNotEmpty) {
-      final matchKeyMap = <String, Set<String>>{};
+      final mySchoolMatchKeys = <String>{};
       for (final doc in schoolSnapshot.docs) {
         final data = doc.data();
         final storedSchoolKey = data['schoolKey']?.toString();
@@ -469,25 +666,16 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
         }
-        matchKeyMap.putIfAbsent(schoolKey, () => <String>{});
-        matchKeyMap[schoolKey]!.addAll(computedKeys);
+        mySchoolMatchKeys.addAll(computedKeys.where((key) => key.isNotEmpty));
       }
-      if (matchKeyMap.isNotEmpty) {
+      if (mySchoolMatchKeys.isNotEmpty) {
         var matchCount = 0;
-        final allKeys = matchKeyMap.values
-            .expand((keys) => keys)
-            .where((key) => key.isNotEmpty)
-            .toSet()
-            .toList();
-        for (var i = 0; i < allKeys.length; i += 10) {
-          final batch = allKeys.sublist(
-            i,
-            i + 10 > allKeys.length ? allKeys.length : i + 10,
-          );
+        for (final key in mySchoolMatchKeys) {
           final snap = await FirebaseFirestore.instance
               .collectionGroup('schools')
-              .where('matchKeys', arrayContainsAny: batch)
+              .where('matchKeys', arrayContains: key)
               .get();
+          final usersForKey = <String>{};
           for (final doc in snap.docs) {
             final data = doc.data();
             final ownerId = data['ownerId'] as String?;
@@ -496,14 +684,9 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
             if (resolvedId == null || resolvedId == userDocId) {
               continue;
             }
-            final docKeys = data['matchKeys'];
-            if (docKeys is List) {
-              matchCount += docKeys
-                  .map((key) => key.toString())
-                  .where(batch.contains)
-                  .length;
-            }
+            usersForKey.add(resolvedId);
           }
+          matchCount += usersForKey.length;
         }
         counts['school'] = matchCount;
       }
@@ -550,6 +733,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
                 .collectionGroup('neighborhoods')
                 .where('matchKey', isEqualTo: matchKey)
                 .get();
+            final usersForKey = <String>{};
             for (final doc in snap.docs) {
               final data = doc.data();
               final ownerId = data['ownerId'] as String?;
@@ -573,9 +757,10 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
                 }
               }
               if (overlaps) {
-                matchCount += 1;
+                usersForKey.add(resolvedId);
               }
             }
+            matchCount += usersForKey.length;
           }
           counts['neighborhood'] = matchCount;
         }
@@ -703,7 +888,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
                 continue;
               }
               allPlanUsers.add(resolvedId);
-              allPlanMatches.add('$myPlanId|$resolvedId|${matchDoc.id}');
+              allPlanMatches.add('$myPlanId|$resolvedId');
             }
           }
           if (myCategory == '여행' &&
@@ -754,7 +939,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
               }
               if (_dateRangesOverlap(myStart, myEnd, otherStart, otherEnd)) {
                 allPlanUsers.add(resolvedId);
-                allPlanMatches.add('$myPlanId|$resolvedId|${matchDoc.id}');
+                allPlanMatches.add('$myPlanId|$resolvedId');
               }
             }
             debugPrint(
@@ -815,7 +1000,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
               }
               if (_dateRangesOverlap(myStart, myEnd, otherStart, otherEnd)) {
                 allPlanUsers.add(resolvedId);
-                allPlanMatches.add('$myPlanId|$resolvedId|${matchDoc.id}');
+                allPlanMatches.add('$myPlanId|$resolvedId');
               }
             }
           }
@@ -852,6 +1037,11 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
       }
     } catch (_) {}
 
+    if (aggregateCounts != null) {
+      counts['school'] = aggregateCounts.schoolCount;
+      counts['neighborhood'] = aggregateCounts.neighborhoodCount;
+      counts['plan'] = aggregateCounts.planCount;
+    }
     final sameSchool = counts['school'] ?? 0;
     final sameNeighborhood = counts['neighborhood'] ?? 0;
     final similarPlan = counts['plan'] ?? 0;
@@ -2289,53 +2479,58 @@ class _HomeBottomNav extends StatelessWidget {
     final shadowColor = isDark
         ? theme.colorScheme.shadow.withOpacity(0.35)
         : const Color(0x1A000000);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: surfaceColor,
-        boxShadow: [
-          BoxShadow(
-            color: shadowColor,
-            blurRadius: 20,
-            offset: const Offset(0, -8),
-          ),
-        ],
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _NavItem(
-            label: '홈',
-            icon: Icons.home_rounded,
-            active: currentIndex == 0,
-            onTap: () => onTap(0),
-          ),
-          _NavItem(
-            label: '기록',
-            icon: Icons.menu_book_rounded,
-            active: currentIndex == 1,
-            onTap: () => onTap(1),
-          ),
-          _NavItem(
-            label: '계획',
-            icon: Icons.blur_circular_rounded,
-            active: currentIndex == 2,
-            onTap: () => onTap(2),
-          ),
-          _NavItem(
-            label: '쪽지',
-            icon: Icons.chat_bubble_outline_rounded,
-            active: currentIndex == 3,
-            onTap: () => onTap(3),
-          ),
-          _NavItem(
-            label: '설정',
-            icon: Icons.settings_rounded,
-            active: currentIndex == 4,
-            onTap: () => onTap(4),
-          ),
-        ],
+    return SafeArea(
+      top: false,
+      left: false,
+      right: false,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: surfaceColor,
+          boxShadow: [
+            BoxShadow(
+              color: shadowColor,
+              blurRadius: 20,
+              offset: const Offset(0, -8),
+            ),
+          ],
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _NavItem(
+              label: '홈',
+              icon: Icons.home_rounded,
+              active: currentIndex == 0,
+              onTap: () => onTap(0),
+            ),
+            _NavItem(
+              label: '기록',
+              icon: Icons.menu_book_rounded,
+              active: currentIndex == 1,
+              onTap: () => onTap(1),
+            ),
+            _NavItem(
+              label: '계획',
+              icon: Icons.blur_circular_rounded,
+              active: currentIndex == 2,
+              onTap: () => onTap(2),
+            ),
+            _MessageNavItem(
+              label: '쪽지',
+              icon: Icons.chat_bubble_outline_rounded,
+              active: currentIndex == 3,
+              onTap: () => onTap(3),
+            ),
+            _NavItem(
+              label: '설정',
+              icon: Icons.settings_rounded,
+              active: currentIndex == 4,
+              onTap: () => onTap(4),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2397,4 +2592,200 @@ class _NavItem extends StatelessWidget {
       ),
     );
   }
+}
+
+class _MessageNavItem extends StatelessWidget {
+  const _MessageNavItem({
+    required this.label,
+    required this.icon,
+    this.active = false,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String?>(
+      future: PremiumService.resolveUserDocId(),
+      builder: (context, userSnap) {
+        final userDocId = userSnap.data;
+        if (userDocId == null) {
+          return _NavItem(
+            label: label,
+            icon: icon,
+            active: active,
+            onTap: onTap,
+          );
+        }
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('threads')
+              .where('participants', arrayContains: userDocId)
+              .snapshots(),
+          builder: (context, threadSnap) {
+            final docs = threadSnap.data?.docs ?? const [];
+            var unreadTotal = 0;
+            for (final doc in docs) {
+              unreadTotal += _resolveThreadUnreadCount(doc.data(), userDocId);
+            }
+            return _NavItemWithBadge(
+              label: label,
+              icon: icon,
+              active: active,
+              onTap: onTap,
+              badgeCount: unreadTotal,
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _NavItemWithBadge extends StatelessWidget {
+  const _NavItemWithBadge({
+    required this.label,
+    required this.icon,
+    this.active = false,
+    required this.onTap,
+    required this.badgeCount,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool active;
+  final VoidCallback onTap;
+  final int badgeCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final activeColor = isDark
+        ? theme.colorScheme.primary
+        : const Color(0xFFFF7A3D);
+    final inactiveColor = isDark
+        ? theme.colorScheme.onSurface.withOpacity(0.5)
+        : const Color(0xFFB0B0B0);
+    final color = active ? activeColor : inactiveColor;
+    final bgColor = active
+        ? (isDark
+              ? theme.colorScheme.primary.withOpacity(0.16)
+              : const Color(0xFFFFF0E6))
+        : Colors.transparent;
+    final showBadge = badgeCount > 0;
+    final badgeText = badgeCount > 99 ? '99+' : '$badgeCount';
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: bgColor,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Center(child: Icon(icon, color: color, size: 24)),
+                if (showBadge)
+                  Positioned(
+                    right: -2,
+                    top: -2,
+                    child: Container(
+                      constraints: const BoxConstraints(minWidth: 18),
+                      height: 18,
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFF3B30),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        badgeText,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          height: 1.0,
+                        ),
+                        textHeightBehavior: const TextHeightBehavior(
+                          applyHeightToFirstAscent: false,
+                          applyHeightToLastDescent: false,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              color: color,
+              fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+int _resolveThreadUnreadCount(Map<String, dynamic> data, String userId) {
+  int asInt(dynamic value) {
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value.trim()) ?? 0;
+    return 0;
+  }
+
+  final unreadCounts = (data['unreadCounts'] as Map?)?.cast<String, dynamic>();
+  final directCount = asInt(unreadCounts?[userId]);
+  if (directCount > 0) return directCount;
+
+  final fallbackCount = asInt(data['unreadCounts.$userId']);
+  if (fallbackCount > 0) return fallbackCount;
+
+  final lastSenderId = data['lastSenderId']?.toString();
+  DateTime? lastMessageAt;
+  final lastMessageAtValue = data['lastMessageAt'];
+  final lastMessageAtClientValue = data['lastMessageAtClient'];
+  if (lastMessageAtValue is Timestamp) {
+    lastMessageAt = lastMessageAtValue.toDate();
+  } else if (lastMessageAtValue is String) {
+    lastMessageAt = DateTime.tryParse(lastMessageAtValue);
+  } else if (lastMessageAtClientValue is Timestamp) {
+    lastMessageAt = lastMessageAtClientValue.toDate();
+  } else if (lastMessageAtClientValue is String) {
+    lastMessageAt = DateTime.tryParse(lastMessageAtClientValue);
+  }
+
+  final lastReadAtMap = (data['lastReadAt'] as Map?)?.cast<String, dynamic>();
+  DateTime? lastReadAt;
+  final lastReadValue = lastReadAtMap?[userId] ?? data['lastReadAt.$userId'];
+  if (lastReadValue is Timestamp) {
+    lastReadAt = lastReadValue.toDate();
+  } else if (lastReadValue is String) {
+    lastReadAt = DateTime.tryParse(lastReadValue);
+  }
+
+  if (lastSenderId != null &&
+      lastSenderId != userId &&
+      lastMessageAt != null &&
+      (lastReadAt == null || lastMessageAt.isAfter(lastReadAt))) {
+    return 1;
+  }
+  return directCount > 0 ? directCount : fallbackCount;
 }

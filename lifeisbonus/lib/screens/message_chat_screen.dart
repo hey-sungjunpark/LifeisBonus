@@ -29,6 +29,7 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
   DocumentReference<Map<String, dynamic>>? _threadRef;
   String? _userDocId;
   bool _blocked = false;
+  final Map<String, _PendingMessage> _pendingMessages = {};
   bool _loading = true;
   String? _loadError;
   Timer? _loadTimer;
@@ -164,25 +165,45 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
     }
     _controller.clear();
     final messageRef = _threadRef!.collection('messages').doc();
-    final sentAt = Timestamp.now();
-    await messageRef.set({
-      'senderId': _userDocId,
-      'text': text,
-      'createdAt': FieldValue.serverTimestamp(),
-      'clientSentAt': DateTime.now().toIso8601String(),
-      'sentAt': sentAt,
+    final now = DateTime.now();
+    final sentAt = Timestamp.fromDate(now);
+    setState(() {
+      _pendingMessages[messageRef.id] = _PendingMessage(
+        id: messageRef.id,
+        text: text,
+        sentAt: now,
+      );
     });
-    await _threadRef!.set({
-      'participants': FieldValue.arrayUnion([_userDocId!, widget.otherUserId]),
-      'participantsKey': _buildThreadId(_userDocId!, widget.otherUserId),
-      'lastMessage': text,
-      'lastMessageAt': sentAt,
-      'lastSenderId': _userDocId,
-      'unreadCounts.${widget.otherUserId}': FieldValue.increment(1),
-      'unreadCounts.${_userDocId!}': 0,
-      'lastReadAt.${_userDocId!}': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    try {
+      await messageRef.set({
+        'senderId': _userDocId,
+        'text': text,
+        // Use client timestamp for immediate local rendering in chat stream.
+        'createdAt': sentAt,
+        'createdAtServer': FieldValue.serverTimestamp(),
+        'clientSentAt': now.toIso8601String(),
+        'sentAt': sentAt,
+      });
+      await _threadRef!.set({
+        'participants': FieldValue.arrayUnion([_userDocId!, widget.otherUserId]),
+        'participantsKey': _buildThreadId(_userDocId!, widget.otherUserId),
+        'lastMessage': text,
+        'lastMessageAt': FieldValue.serverTimestamp(),
+        'lastMessageAtClient': sentAt,
+        'lastSenderId': _userDocId,
+        'unreadCounts.${widget.otherUserId}': FieldValue.increment(1),
+        'unreadCounts.${_userDocId!}': 0,
+        'lastReadAt.${_userDocId!}': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _pendingMessages.remove(messageRef.id);
+        });
+      }
+      rethrow;
+    }
     if (_scrollController.hasClients) {
       _scrollController.animateTo(
         0,
@@ -215,23 +236,38 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
   }
 
   int _resolveUnreadCount(Map<String, dynamic> data, String userId) {
+    int asInt(dynamic value) {
+      if (value is num) {
+        return value.toInt();
+      }
+      if (value is String) {
+        return int.tryParse(value.trim()) ?? 0;
+      }
+      return 0;
+    }
+
     final unreadCounts =
         (data['unreadCounts'] as Map?)?.cast<String, dynamic>();
-    final direct = unreadCounts?[userId];
-    if (direct is num) {
-      return direct.toInt();
+    final directCount = asInt(unreadCounts?[userId]);
+    if (directCount > 0) {
+      return directCount;
     }
-    final fallback = data['unreadCounts.$userId'];
-    if (fallback is num) {
-      return fallback.toInt();
+    final fallbackCount = asInt(data['unreadCounts.$userId']);
+    if (fallbackCount > 0) {
+      return fallbackCount;
     }
     final lastSenderId = data['lastSenderId']?.toString();
     final lastMessageAtValue = data['lastMessageAt'];
+    final lastMessageAtClientValue = data['lastMessageAtClient'];
     DateTime? lastMessageAt;
     if (lastMessageAtValue is Timestamp) {
       lastMessageAt = lastMessageAtValue.toDate();
     } else if (lastMessageAtValue is String) {
       lastMessageAt = DateTime.tryParse(lastMessageAtValue);
+    } else if (lastMessageAtClientValue is Timestamp) {
+      lastMessageAt = lastMessageAtClientValue.toDate();
+    } else if (lastMessageAtClientValue is String) {
+      lastMessageAt = DateTime.tryParse(lastMessageAtClientValue);
     }
     final lastReadAtMap =
         (data['lastReadAt'] as Map?)?.cast<String, dynamic>();
@@ -248,7 +284,7 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
         (lastReadAt == null || lastMessageAt.isAfter(lastReadAt))) {
       return 1;
     }
-    return 0;
+    return directCount > 0 ? directCount : fallbackCount;
   }
 
   @override
@@ -378,21 +414,13 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
                     final threadData = threadSnap.data?.data() ?? {};
                     final otherUnread =
                         _resolveUnreadCount(threadData, widget.otherUserId);
-                    final lastReadAtMap =
-                        (threadData['lastReadAt'] as Map?)?.cast<String, dynamic>();
-                    final otherReadAt = _parseTimestamp(
-                          lastReadAtMap?[widget.otherUserId],
-                        ) ??
-                        _parseTimestamp(
-                          threadData['lastReadAt.${widget.otherUserId}'],
-                        );
                     return Column(
                       children: [
                         Expanded(
                           child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                             stream: _threadRef!
                                 .collection('messages')
-                                .orderBy('sentAt', descending: true)
+                                .orderBy('createdAt', descending: true)
                                 .limit(60)
                                 .snapshots(),
                             builder: (context, snapshot) {
@@ -435,23 +463,62 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
                                   _markRead();
                                 });
                               }
+                              if (_pendingMessages.isNotEmpty) {
+                                final persistedIds = docs.map((d) => d.id).toSet();
+                                final toRemove = _pendingMessages.keys
+                                    .where(persistedIds.contains)
+                                    .toList();
+                                if (toRemove.isNotEmpty) {
+                                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                                    if (!mounted) return;
+                                    setState(() {
+                                      for (final id in toRemove) {
+                                        _pendingMessages.remove(id);
+                                      }
+                                    });
+                                  });
+                                }
+                              }
+                              final unreadMessageIds = <String>{};
+                              if (otherUnread > 0) {
+                                var remaining = otherUnread;
+                                for (final d in docs) {
+                                  if (remaining <= 0) {
+                                    break;
+                                  }
+                                  final m = d.data();
+                                  final mSender = m['senderId']?.toString();
+                                  if (mSender == _userDocId) {
+                                    unreadMessageIds.add(d.id);
+                                    remaining -= 1;
+                                  }
+                                }
+                              }
                               return ListView.builder(
                                 reverse: true,
                                 padding:
                                     const EdgeInsets.fromLTRB(16, 16, 16, 12),
                                 controller: _scrollController,
-                                itemCount: docs.length,
+                                itemCount: docs.length + _pendingMessages.length,
                                 itemBuilder: (context, index) {
-                                  final data = docs[index].data();
+                                  final pendingList = _pendingMessages.values.toList()
+                                    ..sort((a, b) => b.sentAt.compareTo(a.sentAt));
+                                  if (index < pendingList.length) {
+                                    final pending = pendingList[index];
+                                    return _MessageBubble(
+                                      text: pending.text,
+                                      isMe: true,
+                                      showUnread: false,
+                                    );
+                                  }
+                                  final docIndex = index - pendingList.length;
+                                  final data = docs[docIndex].data();
                                   final senderId = data['senderId']?.toString();
                                   final text = data['text']?.toString() ?? '';
-                                  final createdAt = _parseMessageTime(data);
                                   final isMe = senderId == _userDocId;
                                   final showUnread = isMe &&
                                       otherUnread > 0 &&
-                                      (otherReadAt == null ||
-                                          (createdAt != null &&
-                                              createdAt.isAfter(otherReadAt)));
+                                      unreadMessageIds.contains(docs[docIndex].id);
                                   return _MessageBubble(
                                     text: text,
                                     isMe: isMe,
@@ -677,4 +744,16 @@ class _ProfileAvatar extends StatelessWidget {
       child: Icon(Icons.person, color: Color(0xFF8E5BFF)),
     );
   }
+}
+
+class _PendingMessage {
+  const _PendingMessage({
+    required this.id,
+    required this.text,
+    required this.sentAt,
+  });
+
+  final String id;
+  final String text;
+  final DateTime sentAt;
 }

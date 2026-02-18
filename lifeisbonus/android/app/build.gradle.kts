@@ -58,6 +58,11 @@ android {
             (project.findProperty("NAVER_URL_SCHEME") as String?)
                 ?: "naverPk2pE37pz6xuUEj9j6bA",
         )
+        resValue(
+            "string",
+            "default_notification_channel_id",
+            "chat_messages",
+        )
     }
 
     buildTypes {

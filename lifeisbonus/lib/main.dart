@@ -11,6 +11,7 @@ import 'firebase_options.dart';
 import 'utils/plan_city_alias_store.dart';
 import 'utils/institution_alias_store.dart';
 import 'utils/health_activity_alias_store.dart';
+import 'services/push_notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +28,7 @@ Future<void> main() async {
   await HealthActivityAliasStore.instance.load();
   await FirebaseFirestore.instance.clearPersistence();
   FirebaseFirestore.instance.settings = const Settings(persistenceEnabled: false);
+  await PushNotificationService.initialize();
   runApp(const LifeIsBonusApp());
 }
 

@@ -10,11 +10,13 @@ class MessageMatchDetailScreen extends StatefulWidget {
     required this.title,
     required this.subtitle,
     required this.matchKeys,
+    this.presetUserIds = const [],
   });
 
   final String title;
   final String subtitle;
   final List<String> matchKeys;
+  final List<String> presetUserIds;
 
   @override
   State<MessageMatchDetailScreen> createState() =>
@@ -25,8 +27,7 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
   late Future<List<_MatchedUser>> _usersFuture = _loadMatchedUsers();
   List<_MatchedUser> _cachedUsers = [];
   final TextEditingController _searchController = TextEditingController();
-  _MatchSortOption _sortOption = _MatchSortOption.recentYear;
-  String _yearFilter = '전체';
+  _MatchSortOption _sortOption = _MatchSortOption.recentActive;
   int _visibleCount = 10;
 
   @override
@@ -39,6 +40,44 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
     final userDocId = await PremiumService.resolveUserDocId();
     if (userDocId == null) {
       return [];
+    }
+    if (widget.presetUserIds.isNotEmpty) {
+      final users = <_MatchedUser>[];
+      for (final id in widget.presetUserIds.toSet()) {
+        if (id == userDocId) {
+          continue;
+        }
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(id)
+            .get();
+        final nickname = userDoc.data()?['displayName'] as String?;
+        final photoUrl = userDoc.data()?['photoUrl'] as String?;
+        final statusMessage = userDoc.data()?['statusMessage'] as String?;
+        final lastActiveValue = userDoc.data()?['lastActiveAt'];
+        DateTime? lastActiveAt;
+        if (lastActiveValue is Timestamp) {
+          lastActiveAt = lastActiveValue.toDate();
+        } else if (lastActiveValue is String) {
+          lastActiveAt = DateTime.tryParse(lastActiveValue);
+        }
+        users.add(
+          _MatchedUser(
+            id: id,
+            nickname: nickname?.trim().isNotEmpty == true
+                ? nickname!.trim()
+                : '알 수 없음',
+            matchTitle: widget.title,
+            matchSubtitle: widget.subtitle,
+            photoUrl: photoUrl,
+            statusMessage: statusMessage,
+            lastActiveAt: lastActiveAt,
+          ),
+        );
+      }
+      users.sort((a, b) => a.nickname.compareTo(b.nickname));
+      _cachedUsers = users;
+      return users;
     }
     final uniqueUsers = <String, _MatchedUser>{};
     final keys = widget.matchKeys.where((key) => key.isNotEmpty).toList();
@@ -59,16 +98,14 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
         if (resolvedId == null || resolvedId == userDocId) {
           continue;
         }
-        final matchedKey = _findMatchedKey(
-          data['matchKeys'],
-          widget.matchKeys,
-        );
+        final matchedKey = _findMatchedKey(data['matchKeys'], widget.matchKeys);
         if (matchedKey == null) {
           continue;
         }
-        final info = _parseMatchKey(matchedKey);
-        final userDoc =
-            await FirebaseFirestore.instance.collection('users').doc(resolvedId).get();
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(resolvedId)
+            .get();
         final nickname = userDoc.data()?['displayName'] as String?;
         final photoUrl = userDoc.data()?['photoUrl'] as String?;
         final statusMessage = userDoc.data()?['statusMessage'] as String?;
@@ -81,9 +118,12 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
         }
         uniqueUsers[resolvedId] = _MatchedUser(
           id: resolvedId,
-          nickname: nickname?.trim().isNotEmpty == true ? nickname!.trim() : '알 수 없음',
-          matchTitle: info.title,
-          matchSubtitle: info.subtitle,
+          nickname: nickname?.trim().isNotEmpty == true
+              ? nickname!.trim()
+              : '알 수 없음',
+          // 상세는 "클릭한 카드 기준"으로 일관되게 노출한다.
+          matchTitle: widget.title,
+          matchSubtitle: widget.subtitle,
           photoUrl: photoUrl,
           statusMessage: statusMessage,
           lastActiveAt: lastActiveAt,
@@ -109,53 +149,26 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
     return null;
   }
 
-  _MatchKeyInfo _parseMatchKey(String key) {
-    final parts = key.split('|');
-    if (parts.length < 7) {
-      return _MatchKeyInfo(title: widget.title, subtitle: widget.subtitle);
-    }
-    final schoolName = parts[1];
-    final year = parts[5];
-    final grade = parts[6];
-    final classNumber = parts.length > 7 ? parts[7] : '';
-    final title = classNumber.isNotEmpty
-        ? '$schoolName ${grade}학년 ${classNumber}반'
-        : '$schoolName ${grade}학년';
-    final subtitle = '$year년';
-    return _MatchKeyInfo(title: title, subtitle: subtitle);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('매칭된 사람들'),
-      ),
+      appBar: AppBar(title: const Text('매칭된 사람들')),
       body: FutureBuilder<List<_MatchedUser>>(
         future: _usersFuture,
         builder: (context, snapshot) {
           final users = snapshot.data ?? [];
-          final years = users
-              .map((user) => user.matchYear)
-              .whereType<int>()
-              .toSet()
-              .toList()
-            ..sort((a, b) => b.compareTo(a));
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
           if (users.isEmpty) {
-            return const Center(
-              child: Text('매칭된 사용자가 없어요.'),
-            );
+            return const Center(child: Text('매칭된 사용자가 없어요.'));
           }
           final query = _searchController.text.trim();
           final filtered = users.where((user) {
-            final matchesYear = _yearFilter == '전체' ||
-                (user.matchYear?.toString() == _yearFilter);
-            final matchesQuery = query.isEmpty ||
+            final matchesQuery =
+                query.isEmpty ||
                 user.nickname.toLowerCase().contains(query.toLowerCase());
-            return matchesYear && matchesQuery;
+            return matchesQuery;
           }).toList();
           _sortUsers(filtered);
           final visibleUsers = filtered.take(_visibleCount).toList();
@@ -166,16 +179,8 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
             itemBuilder: (context, index) {
               if (index == 0) {
                 return _MatchFilterBar(
-                  years: years,
-                  selectedYear: _yearFilter,
                   sortOption: _sortOption,
                   searchController: _searchController,
-                  onYearChanged: (value) {
-                    setState(() {
-                      _yearFilter = value;
-                      _visibleCount = 10;
-                    });
-                  },
                   onSortChanged: (value) {
                     setState(() {
                       _sortOption = value;
@@ -187,23 +192,24 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
               final listIndex = index - 1;
               if (listIndex < visibleUsers.length) {
                 final user = visibleUsers[listIndex];
-              return _MatchedUserCard(
-                user: user,
-                onSendMessage: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => MessageChatScreen(
-                        otherUserId: user.id,
-                        otherNickname: user.nickname,
-                        otherPhotoUrl: user.photoUrl,
+                return _MatchedUserCard(
+                  user: user,
+                  onSendMessage: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => MessageChatScreen(
+                          otherUserId: user.id,
+                          otherNickname: user.nickname,
+                          otherPhotoUrl: user.photoUrl,
+                        ),
                       ),
-                    ),
-                  );
-                },
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => MatchProfileDetailScreen(user: user),
+                    );
+                  },
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            MatchProfileDetailScreen(user: user),
                       ),
                     );
                   },
@@ -230,8 +236,22 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
 
   void _sortUsers(List<_MatchedUser> users) {
     switch (_sortOption) {
-      case _MatchSortOption.recentYear:
-        users.sort((a, b) => (b.matchYear ?? 0).compareTo(a.matchYear ?? 0));
+      case _MatchSortOption.recentActive:
+        users.sort((a, b) {
+          final aActive = a.lastActiveAt;
+          final bActive = b.lastActiveAt;
+          if (aActive != null && bActive != null) {
+            final cmp = bActive.compareTo(aActive);
+            if (cmp != 0) return cmp;
+          } else if (aActive != null) {
+            return -1;
+          } else if (bActive != null) {
+            return 1;
+          }
+          final yearCmp = (b.matchYear ?? 0).compareTo(a.matchYear ?? 0);
+          if (yearCmp != 0) return yearCmp;
+          return a.nickname.compareTo(b.nickname);
+        });
         break;
       case _MatchSortOption.nickname:
         users.sort((a, b) => a.nickname.compareTo(b.nickname));
@@ -265,22 +285,8 @@ class _MatchedUser {
   }
 }
 
-class _MatchKeyInfo {
-  const _MatchKeyInfo({
-    required this.title,
-    required this.subtitle,
-  });
-
-  final String title;
-  final String subtitle;
-}
-
 class _MatchedUserCard extends StatelessWidget {
-  const _MatchedUserCard({
-    required this.user,
-    this.onTap,
-    this.onSendMessage,
-  });
+  const _MatchedUserCard({required this.user, this.onTap, this.onSendMessage});
 
   final _MatchedUser user;
   final VoidCallback? onTap;
@@ -360,7 +366,10 @@ class _MatchedUserCard extends StatelessWidget {
                   const SizedBox(width: 6),
                   Text(
                     activeLabel,
-                    style: const TextStyle(fontSize: 10, color: Color(0xFF9B9B9B)),
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFF9B9B9B),
+                    ),
                   ),
                 ],
               ),
@@ -410,24 +419,18 @@ class _ProfileAvatar extends StatelessWidget {
   }
 }
 
-enum _MatchSortOption { recentYear, nickname }
+enum _MatchSortOption { recentActive, nickname }
 
 class _MatchFilterBar extends StatelessWidget {
   const _MatchFilterBar({
-    required this.years,
-    required this.selectedYear,
     required this.sortOption,
     required this.searchController,
-    required this.onYearChanged,
     required this.onSortChanged,
     required this.onSearchChanged,
   });
 
-  final List<int> years;
-  final String selectedYear;
   final _MatchSortOption sortOption;
   final TextEditingController searchController;
-  final ValueChanged<String> onYearChanged;
   final ValueChanged<_MatchSortOption> onSortChanged;
   final ValueChanged<String> onSearchChanged;
 
@@ -462,8 +465,8 @@ class _MatchFilterBar extends StatelessWidget {
               underline: const SizedBox.shrink(),
               items: const [
                 DropdownMenuItem(
-                  value: _MatchSortOption.recentYear,
-                  child: Text('최근연도'),
+                  value: _MatchSortOption.recentActive,
+                  child: Text('최근활동 순'),
                 ),
                 DropdownMenuItem(
                   value: _MatchSortOption.nickname,
@@ -478,63 +481,7 @@ class _MatchFilterBar extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 10),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              _YearChip(
-                label: '전체',
-                selected: selectedYear == '전체',
-                onTap: () => onYearChanged('전체'),
-              ),
-              for (final year in years) ...[
-                const SizedBox(width: 8),
-                _YearChip(
-                  label: year.toString(),
-                  selected: selectedYear == year.toString(),
-                  onTap: () => onYearChanged(year.toString()),
-                ),
-              ],
-            ],
-          ),
-        ),
       ],
-    );
-  }
-}
-
-class _YearChip extends StatelessWidget {
-  const _YearChip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: selected ? const Color(0xFF8E5BFF) : const Color(0xFFF3E6FF),
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            color: selected ? Colors.white : const Color(0xFF8E5BFF),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -601,7 +548,10 @@ class MatchProfileDetailScreen extends StatelessWidget {
                     const SizedBox(height: 6),
                     Text(
                       status,
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF7A7A7A)),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF7A7A7A),
+                      ),
                     ),
                   ],
                 ],
@@ -624,33 +574,39 @@ class MatchProfileDetailScreen extends StatelessWidget {
                 children: [
                   Text(
                     user.matchTitle,
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     user.matchSubtitle,
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF9B9B9B),
+                    ),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 18),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => MessageChatScreen(
-                      otherUserId: user.id,
-                      otherNickname: user.nickname,
-                      otherPhotoUrl: user.photoUrl,
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => MessageChatScreen(
+                        otherUserId: user.id,
+                        otherNickname: user.nickname,
+                        otherPhotoUrl: user.photoUrl,
+                      ),
                     ),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.mail_outline),
-              label: const Text('쪽지 보내기'),
+                  );
+                },
+                icon: const Icon(Icons.mail_outline),
+                label: const Text('쪽지 보내기'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF8E5BFF),
                   foregroundColor: Colors.white,

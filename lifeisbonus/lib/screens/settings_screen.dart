@@ -5,7 +5,9 @@ import 'package:kakao_flutter_sdk_user/kakao_flutter_sdk_user.dart';
 import 'package:flutter_naver_login/flutter_naver_login.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/app_settings_service.dart';
 import '../services/premium_service.dart';
+import '../services/push_notification_service.dart';
 import 'login_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -53,8 +55,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    _loadAppSettings();
     _loadProfile();
     _loadPremiumStatus();
+  }
+
+  Future<void> _loadAppSettings() async {
+    await AppSettingsService.ensureLoaded();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _alertsEnabled = AppSettingsService.alertsEnabled.value;
+    });
   }
 
   Future<void> _loadProfile() async {
@@ -82,8 +95,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() {
         _nickname = displayName is String ? displayName.trim() : null;
         _age = birthDate == null ? null : _calculateAge(birthDate, DateTime.now());
+        if (data?['notificationsEnabled'] is bool) {
+          _alertsEnabled = data?['notificationsEnabled'] as bool;
+        }
         _loadingProfile = false;
       });
+      if (data?['notificationsEnabled'] is bool) {
+        await AppSettingsService.setAlertsEnabled(
+          data?['notificationsEnabled'] as bool,
+        );
+      }
     } catch (_) {
       setState(() {
         _loadingProfile = false;
@@ -177,12 +198,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           content: const Text('프리미엄 구독을 해지할까요?'),
                           actions: [
                             TextButton(
-                              onPressed: () => Navigator.of(context).pop(false),
-                              child: const Text('취소'),
-                            ),
-                            TextButton(
                               onPressed: () => Navigator.of(context).pop(true),
                               child: const Text('해지'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(false),
+                              child: const Text('취소'),
                             ),
                           ],
                         ),
@@ -816,10 +837,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.notifications_none_rounded,
                   label: '알림 설정',
                   value: _alertsEnabled,
-                  onChanged: (value) {
+                  onChanged: (value) async {
+                    if (value && !_alertsEnabled) {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('알림 설정'),
+                          content: const Text('알림을 켜시겠어요?'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(false),
+                              child: const Text('취소'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(true),
+                              child: const Text('확인'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed != true) {
+                        return;
+                      }
+                    }
                     setState(() {
                       _alertsEnabled = value;
                     });
+                    await AppSettingsService.setAlertsEnabled(value);
+                    await PushNotificationService.syncNotificationPreference(
+                      value,
+                    );
                   },
                 ),
               ],
