@@ -5,6 +5,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../services/age_gate_service.dart';
+
 class SignUpScreen extends StatefulWidget {
   const SignUpScreen({super.key});
 
@@ -538,6 +540,10 @@ class _SignUpScreenState extends State<SignUpScreen> {
     }
     if (_birthDate == null) {
       _showMessage('생년월일을 선택해주세요.');
+      return;
+    }
+    if (!AgeGateService.isAllowed(_birthDate!)) {
+      _showMessage('만 14세 미만은 회원가입 및 로그인이 불가합니다.');
       return;
     }
 

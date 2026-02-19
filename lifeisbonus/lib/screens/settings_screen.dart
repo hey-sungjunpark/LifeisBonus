@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:kakao_flutter_sdk_user/kakao_flutter_sdk_user.dart';
 import 'package:flutter_naver_login/flutter_naver_login.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../services/app_settings_service.dart';
 import '../services/premium_service.dart';
@@ -18,6 +19,10 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  static const String _privacyPolicyUrl =
+      'https://sore-spatula-c9f.notion.site/30bf010910c6806f8dfce301204521db';
+  static const String _termsOfServiceUrl =
+      'https://sore-spatula-c9f.notion.site/30bf010910c6800a89fdd655046839d4';
   bool _alertsEnabled = true;
   bool _loadingProfile = true;
   String? _nickname;
@@ -136,6 +141,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _openUrlWithRetry({
+    required String url,
+    required String label,
+  }) async {
+    while (mounted) {
+      final opened = await launchUrl(
+        Uri.parse(url),
+        mode: LaunchMode.externalApplication,
+      );
+      if (opened || !mounted) {
+        return;
+      }
+      final retry = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('$label 열기 실패'),
+          content: const Text('페이지를 열 수 없어요. 다시 시도할까요?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('닫기'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('재시도'),
+            ),
+          ],
+        ),
+      );
+      if (retry != true) {
+        return;
+      }
+    }
+  }
+
+  Future<void> _openPrivacyPolicy() => _openUrlWithRetry(
+    url: _privacyPolicyUrl,
+    label: '개인정보 처리방침',
+  );
+
+  Future<void> _openTermsOfService() => _openUrlWithRetry(
+    url: _termsOfServiceUrl,
+    label: '서비스 이용약관',
+  );
+
+  Future<void> _openHelpCenter() async {
+    if (!mounted) {
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const _HelpFaqScreen()),
+    );
+  }
+
+  Future<void> _openCustomerCenter() async {
+    if (!mounted) {
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const _CustomerCenterScreen()),
+    );
+  }
+
   Future<void> _openPremiumManager() async {
     await _loadPremiumStatus();
     if (!mounted) {
@@ -211,7 +279,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       if (confirm != true) {
                         return;
                       }
-                      await PremiumService.cancelSubscription();
+                      final uri = await PremiumService.buildManageSubscriptionUri(
+                        productId: 'lifeisbonus_premium_monthly_9900',
+                      );
+                      if (uri == null) {
+                        if (!mounted) {
+                          return;
+                        }
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('이 기기에서는 구독 관리를 열 수 없어요.')),
+                        );
+                        return;
+                      }
+                      final opened = await launchUrl(
+                        uri,
+                        mode: LaunchMode.externalApplication,
+                      );
+                      if (!opened) {
+                        if (!mounted) {
+                          return;
+                        }
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('스토어 구독 관리 페이지를 열 수 없어요.')),
+                        );
+                        return;
+                      }
                       if (!mounted) {
                         return;
                       }
@@ -219,7 +311,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         context: context,
                         builder: (context) => AlertDialog(
                           title: const Text('안내'),
-                          content: const Text('프리미엄 구독이 해지되었습니다'),
+                          content: const Text('스토어 구독 관리 화면으로 이동했습니다.\n해지는 해당 화면에서 완료해 주세요.'),
                           actions: [
                             TextButton(
                               onPressed: () => Navigator.of(context).pop(),
@@ -234,8 +326,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       Navigator.of(context).pop();
                       await _loadPremiumStatus();
                     },
-                    icon: const Icon(Icons.cancel_outlined),
-                    label: const Text('프리미엄 해지'),
+                    icon: const Icon(Icons.open_in_new_rounded),
+                    label: const Text('스토어에서 구독 관리'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFFFDECEC),
                       foregroundColor: const Color(0xFFD64545),
@@ -877,24 +969,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _SettingsCard(
             child: Column(
               children: [
-                const _SettingRow(
+                _SettingRow(
                   icon: Icons.help_outline_rounded,
                   label: '도움말',
+                  onTap: _openHelpCenter,
                 ),
                 Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
-                const _SettingRow(
+                _SettingRow(
                   icon: Icons.privacy_tip_outlined,
                   label: '개인정보 처리방침',
+                  onTap: _openPrivacyPolicy,
                 ),
                 Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
-                const _SettingRow(
+                _SettingRow(
                   icon: Icons.description_outlined,
                   label: '서비스 이용약관',
+                  onTap: _openTermsOfService,
                 ),
                 Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
-                const _SettingRow(
+                _SettingRow(
                   icon: Icons.support_agent_rounded,
                   label: '고객센터',
+                  onTap: _openCustomerCenter,
                 ),
                 Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
                 _SettingRow(
@@ -936,7 +1032,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               SizedBox(height: 4),
               Text(
-                '© 2024 Life Bonus. All rights reserved.',
+                '© 2026 Life is Bonus. All rights reserved.',
                 style: TextStyle(
                   fontSize: 10,
                   color: isDark
@@ -1171,6 +1267,166 @@ class _Badge extends StatelessWidget {
           fontSize: 11,
           color: isDark ? colorScheme.onPrimaryContainer : const Color(0xFF8E5BFF),
           fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+class _HelpFaqScreen extends StatelessWidget {
+  const _HelpFaqScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    const faqs = <({String q, String a})>[
+      (
+        q: '인생은보너스 앱은 어떤 서비스인가요?',
+        a:
+            '학교/동네/추억/계획 기록을 기반으로 비슷한 배경과 계획을 가진 사람을 매칭하고, 프리미엄 구독 시 쪽지로 대화할 수 있는 서비스입니다.'
+      ),
+      (
+        q: '회원가입 시 만 14세 미만도 이용할 수 있나요?',
+        a: '아니요. 만 14세 미만은 회원가입 및 로그인이 제한됩니다.'
+      ),
+      (
+        q: '매칭 수는 어떤 기준으로 계산되나요?',
+        a:
+            '학교/동네/계획 조건의 일치 여부를 기준으로 계산합니다. 동일 사용자라도 조건이 다르면 각각 별도 매칭으로 집계될 수 있습니다.'
+      ),
+      (
+        q: '프리미엄 구독을 해지하면 바로 이용이 중단되나요?',
+        a:
+            '자동갱신만 중단되며, 이미 결제된 이용 기간이 남아 있으면 기간 종료 시점까지 프리미엄 기능을 사용할 수 있습니다.'
+      ),
+      (
+        q: '환불은 어디서 진행하나요?',
+        a:
+            '인앱결제 환불은 Apple App Store / Google Play 결제 정책을 따릅니다. 각 스토어 결제내역에서 환불 요청을 진행해 주세요.'
+      ),
+      (
+        q: '알림이 오지 않을 때는 어떻게 하나요?',
+        a:
+            '앱 설정의 알림 설정이 ON인지 확인하고, 단말 OS 설정에서 인생은보너스 알림 권한(잠금화면/배너/소리)을 허용해 주세요.'
+      ),
+    ];
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('도움말')),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        children: [
+          const Text(
+            '자주 묻는 질문',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 10),
+          ...faqs.map(
+            (item) => Card(
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: const BorderSide(color: Color(0xFFE9E9EF)),
+              ),
+              child: ExpansionTile(
+                title: Text(
+                  item.q,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      item.a,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        height: 1.5,
+                        color: Color(0xFF66666F),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CustomerCenterScreen extends StatelessWidget {
+  const _CustomerCenterScreen();
+
+  static const String _supportEmail = 'lifeisbonus.app@gmail.com';
+
+  Future<void> _openMailApp(BuildContext context) async {
+    final uri = Uri(
+      scheme: 'mailto',
+      path: _supportEmail,
+      queryParameters: {'subject': '[인생은보너스] 문의'},
+    );
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!opened && context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('메일 앱을 열 수 없어요.')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('고객센터')),
+      body: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '문의 안내',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              '앱 이용 중 문의 사항 또는 결제/환불 관련 요청은 아래 이메일로 연락해 주세요.',
+              style: TextStyle(fontSize: 14, height: 1.5, color: Color(0xFF66666F)),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF7F7FB),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFE9E9EF)),
+              ),
+              child: const SelectableText(
+                _supportEmail,
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+            ),
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              height: 46,
+              child: ElevatedButton(
+                onPressed: () => _openMailApp(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFFF7A3D),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text('메일로 문의하기'),
+              ),
+            ),
+          ],
         ),
       ),
     );

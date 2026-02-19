@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../services/match_count_service.dart';
 import '../services/premium_service.dart';
 import '../utils/institution_alias_store.dart';
+import '../utils/match_one_liner_store.dart';
 import '../utils/plan_city_alias_store.dart';
 import 'premium_connect_screen.dart';
 import 'message_match_detail_screen.dart';
@@ -13,10 +14,7 @@ import 'message_chat_screen.dart';
 import 'message_manage_screen.dart';
 
 class MessageScreen extends StatefulWidget {
-  const MessageScreen({
-    super.key,
-    this.openLatestUnreadToken = 0,
-  });
+  const MessageScreen({super.key, this.openLatestUnreadToken = 0});
 
   final int openLatestUnreadToken;
 
@@ -25,9 +23,20 @@ class MessageScreen extends StatefulWidget {
 }
 
 class _MessageScreenState extends State<MessageScreen> {
+  static const Duration _matchCacheTtl = Duration(seconds: 45);
+
   late Future<String?> _userDocIdFuture = PremiumService.resolveUserDocId();
   final Map<String, Future<_UserProfile>> _profileFutures = {};
   late Future<Set<String>> _blockedFuture = _loadBlockedUsers();
+  Future<_MatchSections>? _matchSectionsFuture;
+  String? _matchSectionsUserId;
+  _MatchSections? _cachedMatchSections;
+  DateTime? _cachedMatchSectionsAt;
+  bool _refreshingMatchSections = false;
+  Future<Map<String, String>>? _oneLinersFuture;
+  String? _oneLinersUserId;
+  Map<String, String> _cachedOneLiners = const {};
+  bool _oneLinersLoaded = false;
   int _lastHandledAutoOpenToken = -1;
   bool _autoOpenLatestUnreadRequested = false;
 
@@ -64,11 +73,7 @@ class _MessageScreenState extends State<MessageScreen> {
     return snap.docs.map((doc) => doc.id).toSet();
   }
 
-  Future<_MatchSections> _loadMatchSections() async {
-    final userDocId = await _userDocIdFuture;
-    if (userDocId == null) {
-      return const _MatchSections.empty();
-    }
+  Future<_MatchSections> _loadMatchSections(String userDocId) async {
     final aggregate = await MatchCountService().loadForUser(userDocId);
     final school = aggregate.schoolBuckets
         .map(
@@ -76,6 +81,7 @@ class _MessageScreenState extends State<MessageScreen> {
             title: b.title,
             subtitle: b.subtitle,
             count: '${b.count}명',
+            matchKey: b.key,
             matchKeys: [b.key],
             icon: Icons.school_rounded,
             matchType: _MatchType.school,
@@ -89,6 +95,7 @@ class _MessageScreenState extends State<MessageScreen> {
             title: b.title,
             subtitle: b.subtitle,
             count: '${b.count}명',
+            matchKey: b.key,
             matchKeys: const [],
             icon: Icons.home_rounded,
             matchType: _MatchType.neighborhood,
@@ -102,6 +109,7 @@ class _MessageScreenState extends State<MessageScreen> {
             title: b.title,
             subtitle: b.subtitle,
             count: '${b.count}명',
+            matchKey: b.key,
             matchKeys: const [],
             icon: Icons.map_rounded,
             matchType: _MatchType.plan,
@@ -114,6 +122,187 @@ class _MessageScreenState extends State<MessageScreen> {
       neighborhoodCards: neighborhood,
       planCards: plan,
     );
+  }
+
+  Future<_MatchSections> _matchSectionsForUser(String? userDocId) {
+    if (userDocId == null) {
+      return Future.value(const _MatchSections.empty());
+    }
+    if (_matchSectionsUserId != userDocId) {
+      _matchSectionsUserId = userDocId;
+      _matchSectionsFuture = null;
+      _cachedMatchSections = null;
+      _cachedMatchSectionsAt = null;
+      _refreshingMatchSections = false;
+    }
+
+    final cached = _cachedMatchSections;
+    final cachedAt = _cachedMatchSectionsAt;
+    if (cached != null && cachedAt != null) {
+      final isStale = DateTime.now().difference(cachedAt) > _matchCacheTtl;
+      if (isStale) {
+        _refreshMatchSectionsInBackground(userDocId);
+      }
+      return Future.value(cached);
+    }
+
+    if (_matchSectionsFuture != null) {
+      return _matchSectionsFuture!;
+    }
+
+    _matchSectionsFuture = _loadMatchSections(userDocId)
+        .then((value) {
+          _cachedMatchSections = value;
+          _cachedMatchSectionsAt = DateTime.now();
+          return value;
+        })
+        .whenComplete(() {
+          _matchSectionsFuture = null;
+        });
+    return _matchSectionsFuture!;
+  }
+
+  Future<Map<String, String>> _oneLinersForUser(String? userDocId) {
+    if (userDocId == null) {
+      return Future.value(const {});
+    }
+    if (_oneLinersUserId != userDocId) {
+      _oneLinersUserId = userDocId;
+      _oneLinersFuture = null;
+      _cachedOneLiners = const {};
+      _oneLinersLoaded = false;
+    }
+    if (_oneLinersLoaded) {
+      return Future.value(_cachedOneLiners);
+    }
+    if (_oneLinersFuture != null) {
+      return _oneLinersFuture!;
+    }
+    _oneLinersFuture = MatchOneLinerStore.loadMine(userDocId)
+        .then((value) {
+          _cachedOneLiners = value;
+          _oneLinersLoaded = true;
+          return value;
+        })
+        .whenComplete(() {
+          _oneLinersFuture = null;
+        });
+    return _oneLinersFuture!;
+  }
+
+  String _cardOneLinerKey(_MatchType type, String matchKey) {
+    return MatchOneLinerStore.storageKey(
+      matchType: _matchTypeText(type),
+      matchKey: matchKey,
+    );
+  }
+
+  String _matchTypeText(_MatchType type) {
+    switch (type) {
+      case _MatchType.school:
+        return 'school';
+      case _MatchType.neighborhood:
+        return 'neighborhood';
+      case _MatchType.plan:
+        return 'plan';
+    }
+  }
+
+  Future<void> _editOneLiner(
+    BuildContext context, {
+    required String userDocId,
+    required _MatchCardData card,
+    required String initialValue,
+  }) async {
+    var draft = initialValue;
+    final saved = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('나의 한줄'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${card.title} 친구들에게 보여질 한줄 메세지를 입력하세요',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF7A7A7A)),
+            ),
+            const SizedBox(height: 8),
+            TextFormField(
+              initialValue: initialValue,
+              maxLength: 20,
+              onChanged: (value) => draft = value,
+              decoration: const InputDecoration(
+                hintText: '20자 이내',
+                border: OutlineInputBorder(),
+                counterText: '',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop(draft.trim());
+            },
+            child: const Text('저장'),
+          ),
+        ],
+      ),
+    );
+    if (saved == null) {
+      return;
+    }
+    try {
+      await MatchOneLinerStore.upsertMine(
+        userDocId: userDocId,
+        matchType: _matchTypeText(card.matchType),
+        matchKey: card.matchKey,
+        message: saved,
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('나의 한줄 저장에 실패했어요. 다시 시도해주세요.')),
+        );
+      }
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      final next = Map<String, String>.from(_cachedOneLiners);
+      final key = _cardOneLinerKey(card.matchType, card.matchKey);
+      if (saved.trim().isEmpty) {
+        next.remove(key);
+      } else {
+        next[key] = saved.trim();
+      }
+      _cachedOneLiners = next;
+    });
+  }
+
+  void _refreshMatchSectionsInBackground(String userDocId) {
+    if (_refreshingMatchSections) {
+      return;
+    }
+    _refreshingMatchSections = true;
+    _loadMatchSections(userDocId)
+        .then((value) {
+          _cachedMatchSections = value;
+          _cachedMatchSectionsAt = DateTime.now();
+          if (mounted) {
+            setState(() {});
+          }
+        })
+        .whenComplete(() {
+          _refreshingMatchSections = false;
+        });
   }
 
   Future<List<_MatchCardData>> _loadSchoolMatchCards() async {
@@ -206,6 +395,7 @@ class _MessageScreenState extends State<MessageScreen> {
               title: schoolLabel.$1,
               subtitle: schoolLabel.$2,
               count: '${matchedUserIds.length}명',
+              matchKey: matchKey,
               matchKeys: [matchKey],
               icon: Icons.school_rounded,
               matchType: _MatchType.school,
@@ -360,6 +550,7 @@ class _MessageScreenState extends State<MessageScreen> {
             title: label.trim().isEmpty ? '동네' : label,
             subtitle: '$minYear년 ~ $maxYear년',
             count: '${matchedUserIds.length}명',
+            matchKey: matchKey,
             matchKeys: const [],
             icon: Icons.home_rounded,
             matchType: _MatchType.neighborhood,
@@ -525,6 +716,7 @@ class _MessageScreenState extends State<MessageScreen> {
               title: _buildPlanTitle(data),
               subtitle: _buildPlanSubtitle(data, myStart, myEnd),
               count: '$count명',
+              matchKey: queryKeys.first,
               matchKeys: const [],
               icon: Icons.map_rounded,
               matchType: _MatchType.plan,
@@ -766,10 +958,13 @@ class _MessageScreenState extends State<MessageScreen> {
           builder: (context, idSnapshot) {
             final userDocId = idSnapshot.data;
             return FutureBuilder<_MatchSections>(
-              future: _loadMatchSections(),
+              future: _matchSectionsForUser(userDocId),
               builder: (context, matchSnapshot) {
                 final matchSections =
                     matchSnapshot.data ?? _MatchSections.empty();
+                final matchLoading =
+                    !matchSnapshot.hasData &&
+                    matchSnapshot.connectionState != ConnectionState.done;
                 final hasMatchCards =
                     matchSections.schoolCards.isNotEmpty ||
                     matchSections.neighborhoodCards.isNotEmpty ||
@@ -778,174 +973,198 @@ class _MessageScreenState extends State<MessageScreen> {
                   future: _blockedFuture,
                   builder: (context, blockedSnap) {
                     final blocked = blockedSnap.data ?? {};
-                    return SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
-                      child: Column(
-                        children: [
-                          Text(
-                            '나의 인연',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFFFF7A3D),
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          const Text(
-                            '같은 추억과 계획을 가진 사람들과 연결되어 보세요',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF9B9B9B),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          if (!isPremium)
-                            _PremiumCtaCard(
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (context) =>
-                                        const PremiumConnectScreen(),
-                                  ),
-                                );
-                              },
-                            )
-                          else
-                            const _PremiumActiveInfo(),
-                          const SizedBox(height: 16),
-                          _ThreadSection(
-                            userDocId: userDocId,
-                            isPremium: isPremium,
-                            autoOpenLatestUnread:
-                                _autoOpenLatestUnreadRequested,
-                            onAutoOpenHandled: () {
-                              _autoOpenLatestUnreadRequested = false;
-                            },
-                            profileLoader: _loadProfile,
-                            blocked: blocked,
-                            onOpenThread: (thread) {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) => MessageChatScreen(
-                                    otherUserId: thread.otherUserId,
-                                    otherNickname: thread.otherNickname,
-                                    otherPhotoUrl: thread.otherPhotoUrl,
-                                  ),
-                                ),
-                              );
-                            },
-                            onBlock: (otherId) async {
-                              if (userDocId == null) {
-                                return;
-                              }
-                              await FirebaseFirestore.instance
-                                  .collection('users')
-                                  .doc(userDocId)
-                                  .collection('blocks')
-                                  .doc(otherId)
-                                  .set({
-                                    'createdAt': FieldValue.serverTimestamp(),
-                                  });
-                              setState(() {
-                                _blockedFuture = _loadBlockedUsers();
-                              });
-                            },
-                            onReport: (otherId) async {
-                              if (userDocId == null) {
-                                return;
-                              }
-                              await FirebaseFirestore.instance
-                                  .collection('users')
-                                  .doc(userDocId)
-                                  .collection('reports')
-                                  .add({
-                                    'targetId': otherId,
-                                    'createdAt': FieldValue.serverTimestamp(),
-                                  });
-                            },
-                            onDeleteThread: (threadId) async {
-                              if (userDocId == null) {
-                                return;
-                              }
-                              await FirebaseFirestore.instance
-                                  .collection('threads')
-                                  .doc(threadId)
-                                  .set({
-                                    'hiddenBy.$userDocId': true,
-                                    'updatedAt': FieldValue.serverTimestamp(),
-                                  }, SetOptions(merge: true));
-                            },
-                            onTogglePin: (threadId, pinned) async {
-                              if (userDocId == null) {
-                                return;
-                              }
-                              await FirebaseFirestore.instance
-                                  .collection('threads')
-                                  .doc(threadId)
-                                  .set({
-                                    'pinnedBy.$userDocId': pinned,
-                                    'updatedAt': FieldValue.serverTimestamp(),
-                                  }, SetOptions(merge: true));
-                            },
-                          ),
-                          const SizedBox(height: 18),
-                          Row(
-                            children: const [
-                              Icon(
-                                Icons.group_rounded,
-                                color: Color(0xFFB356FF),
-                                size: 18,
-                              ),
-                              SizedBox(width: 6),
+                    return FutureBuilder<Map<String, String>>(
+                      future: _oneLinersForUser(userDocId),
+                      builder: (context, oneLinerSnap) {
+                        final oneLiners = oneLinerSnap.data ?? const {};
+                        return SingleChildScrollView(
+                          padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+                          child: Column(
+                            children: [
                               Text(
-                                '나와 매칭되는 사람들',
+                                '나의 인연',
                                 style: TextStyle(
-                                  fontSize: 13,
+                                  fontSize: 20,
                                   fontWeight: FontWeight.w700,
+                                  color: Color(0xFFFF7A3D),
                                 ),
                               ),
+                              const SizedBox(height: 6),
+                              const Text(
+                                '같은 추억과 계획을 가진 사람들과 연결되어 보세요',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF9B9B9B),
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              if (!isPremium)
+                                _PremiumCtaCard(
+                                  onTap: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (context) =>
+                                            const PremiumConnectScreen(),
+                                      ),
+                                    );
+                                  },
+                                )
+                              else
+                                const _PremiumActiveInfo(),
+                              const SizedBox(height: 16),
+                              _ThreadSection(
+                                userDocId: userDocId,
+                                isPremium: isPremium,
+                                autoOpenLatestUnread:
+                                    _autoOpenLatestUnreadRequested,
+                                onAutoOpenHandled: () {
+                                  _autoOpenLatestUnreadRequested = false;
+                                },
+                                profileLoader: _loadProfile,
+                                blocked: blocked,
+                                onOpenThread: (thread) {
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (context) => MessageChatScreen(
+                                        otherUserId: thread.otherUserId,
+                                        otherNickname: thread.otherNickname,
+                                        otherPhotoUrl: thread.otherPhotoUrl,
+                                      ),
+                                    ),
+                                  );
+                                },
+                                onBlock: (otherId) async {
+                                  if (userDocId == null) {
+                                    return;
+                                  }
+                                  await FirebaseFirestore.instance
+                                      .collection('users')
+                                      .doc(userDocId)
+                                      .collection('blocks')
+                                      .doc(otherId)
+                                      .set({
+                                        'createdAt':
+                                            FieldValue.serverTimestamp(),
+                                      });
+                                  setState(() {
+                                    _blockedFuture = _loadBlockedUsers();
+                                  });
+                                },
+                                onReport: (otherId) async {
+                                  if (userDocId == null) {
+                                    return;
+                                  }
+                                  await FirebaseFirestore.instance
+                                      .collection('users')
+                                      .doc(userDocId)
+                                      .collection('reports')
+                                      .add({
+                                        'targetId': otherId,
+                                        'createdAt':
+                                            FieldValue.serverTimestamp(),
+                                      });
+                                },
+                                onDeleteThread: (threadId) async {
+                                  if (userDocId == null) {
+                                    return;
+                                  }
+                                  await FirebaseFirestore.instance
+                                      .collection('threads')
+                                      .doc(threadId)
+                                      .set({
+                                        'hiddenBy.$userDocId': true,
+                                        'updatedAt':
+                                            FieldValue.serverTimestamp(),
+                                      }, SetOptions(merge: true));
+                                },
+                                onTogglePin: (threadId, pinned) async {
+                                  if (userDocId == null) {
+                                    return;
+                                  }
+                                  await FirebaseFirestore.instance
+                                      .collection('threads')
+                                      .doc(threadId)
+                                      .set({
+                                        'pinnedBy.$userDocId': pinned,
+                                        'updatedAt':
+                                            FieldValue.serverTimestamp(),
+                                      }, SetOptions(merge: true));
+                                },
+                              ),
+                              const SizedBox(height: 18),
+                              Row(
+                                children: const [
+                                  Icon(
+                                    Icons.group_rounded,
+                                    color: Color(0xFFB356FF),
+                                    size: 18,
+                                  ),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    '나와 매칭되는 사람들',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              if (matchLoading)
+                                const _EmptyHint(
+                                  icon: Icons.hourglass_bottom_rounded,
+                                  title: '매칭 정보를 불러오는 중이에요',
+                                  subtitle: '잠시만 기다려주세요',
+                                )
+                              else if (!hasMatchCards)
+                                const _EmptyHint(
+                                  icon: Icons.search_off_rounded,
+                                  title: '아직 매칭된 사람이 없어요',
+                                  subtitle: '학교/동네/계획 기록을 더 추가해보세요',
+                                )
+                              else ...[
+                                if (matchSections.schoolCards.isNotEmpty) ...[
+                                  const _MatchSectionTitle(title: '학교 매칭 상세'),
+                                  const SizedBox(height: 8),
+                                  ..._buildMatchCards(
+                                    context,
+                                    cards: matchSections.schoolCards,
+                                    isPremium: isPremium,
+                                    userDocId: userDocId,
+                                    myOneLiners: oneLiners,
+                                  ),
+                                  const SizedBox(height: 6),
+                                ],
+                                if (matchSections
+                                    .neighborhoodCards
+                                    .isNotEmpty) ...[
+                                  const _MatchSectionTitle(title: '동네 매칭 상세'),
+                                  const SizedBox(height: 8),
+                                  ..._buildMatchCards(
+                                    context,
+                                    cards: matchSections.neighborhoodCards,
+                                    isPremium: isPremium,
+                                    userDocId: userDocId,
+                                    myOneLiners: oneLiners,
+                                  ),
+                                  const SizedBox(height: 6),
+                                ],
+                                if (matchSections.planCards.isNotEmpty) ...[
+                                  const _MatchSectionTitle(title: '계획 매칭 상세'),
+                                  const SizedBox(height: 8),
+                                  ..._buildMatchCards(
+                                    context,
+                                    cards: matchSections.planCards,
+                                    isPremium: isPremium,
+                                    userDocId: userDocId,
+                                    myOneLiners: oneLiners,
+                                  ),
+                                ],
+                              ],
                             ],
                           ),
-                          const SizedBox(height: 12),
-                          if (!hasMatchCards)
-                            const _EmptyHint(
-                              icon: Icons.search_off_rounded,
-                              title: '아직 매칭된 사람이 없어요',
-                              subtitle: '학교/동네/계획 기록을 더 추가해보세요',
-                            )
-                          else ...[
-                            if (matchSections.schoolCards.isNotEmpty) ...[
-                              const _MatchSectionTitle(title: '학교 매칭 상세'),
-                              const SizedBox(height: 8),
-                              ..._buildMatchCards(
-                                context,
-                                cards: matchSections.schoolCards,
-                                isPremium: isPremium,
-                              ),
-                              const SizedBox(height: 6),
-                            ],
-                            if (matchSections.neighborhoodCards.isNotEmpty) ...[
-                              const _MatchSectionTitle(title: '동네 매칭 상세'),
-                              const SizedBox(height: 8),
-                              ..._buildMatchCards(
-                                context,
-                                cards: matchSections.neighborhoodCards,
-                                isPremium: isPremium,
-                              ),
-                              const SizedBox(height: 6),
-                            ],
-                            if (matchSections.planCards.isNotEmpty) ...[
-                              const _MatchSectionTitle(title: '계획 매칭 상세'),
-                              const SizedBox(height: 8),
-                              ..._buildMatchCards(
-                                context,
-                                cards: matchSections.planCards,
-                                isPremium: isPremium,
-                              ),
-                            ],
-                          ],
-                        ],
-                      ),
+                        );
+                      },
                     );
                   },
                 );
@@ -961,6 +1180,8 @@ class _MessageScreenState extends State<MessageScreen> {
     BuildContext context, {
     required List<_MatchCardData> cards,
     required bool isPremium,
+    required String? userDocId,
+    required Map<String, String> myOneLiners,
   }) {
     return cards.map((card) {
       Future<void> onTap() async {
@@ -1005,6 +1226,8 @@ class _MessageScreenState extends State<MessageScreen> {
                 title: card.title,
                 subtitle: card.subtitle,
                 matchKeys: card.matchKeys,
+                matchType: _matchTypeText(card.matchType),
+                matchKey: card.matchKey,
               ),
             ),
           );
@@ -1018,11 +1241,30 @@ class _MessageScreenState extends State<MessageScreen> {
                 subtitle: card.subtitle,
                 matchKeys: const [],
                 presetUserIds: card.matchedUserIds,
+                matchType: _matchTypeText(card.matchType),
+                matchKey: card.matchKey,
               ),
             ),
           );
         }
       }
+
+      Future<void> onTapOneLiner() async {
+        if (!isPremium || userDocId == null || card.matchKey.isEmpty) {
+          return;
+        }
+        final current =
+            myOneLiners[_cardOneLinerKey(card.matchType, card.matchKey)] ?? '';
+        await _editOneLiner(
+          context,
+          userDocId: userDocId,
+          card: card,
+          initialValue: current,
+        );
+      }
+
+      final oneLiner =
+          myOneLiners[_cardOneLinerKey(card.matchType, card.matchKey)] ?? '';
 
       return Padding(
         padding: const EdgeInsets.only(bottom: 12),
@@ -1035,6 +1277,8 @@ class _MessageScreenState extends State<MessageScreen> {
           showPremiumRow: !isPremium,
           onTapCount: onTap,
           onTapTitle: onTap,
+          oneLiner: oneLiner,
+          onTapOneLiner: onTapOneLiner,
         ),
       );
     }).toList();
@@ -1064,6 +1308,7 @@ class _MatchCardData {
     required this.title,
     required this.subtitle,
     required this.count,
+    required this.matchKey,
     required this.matchKeys,
     required this.icon,
     required this.matchType,
@@ -1073,6 +1318,7 @@ class _MatchCardData {
   final String title;
   final String subtitle;
   final String count;
+  final String matchKey;
   final List<String> matchKeys;
   final IconData icon;
   final _MatchType matchType;
@@ -1245,17 +1491,14 @@ class _ThreadSectionState extends State<_ThreadSection> {
                 _autoOpenedUnread = true;
                 final targetThread = threads
                     .where((thread) => thread.unreadCount > 0)
-                    .fold<_ThreadItem?>(
-                      null,
-                      (best, current) {
-                        if (best == null) {
-                          return current;
-                        }
-                        final bestAt = best.lastMessageAt ?? DateTime(0);
-                        final currentAt = current.lastMessageAt ?? DateTime(0);
-                        return currentAt.isAfter(bestAt) ? current : best;
-                      },
-                    );
+                    .fold<_ThreadItem?>(null, (best, current) {
+                      if (best == null) {
+                        return current;
+                      }
+                      final bestAt = best.lastMessageAt ?? DateTime(0);
+                      final currentAt = current.lastMessageAt ?? DateTime(0);
+                      return currentAt.isAfter(bestAt) ? current : best;
+                    });
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (!mounted) {
                     return;
@@ -1281,7 +1524,7 @@ class _ThreadSectionState extends State<_ThreadSection> {
                   .toList();
               final visibleOtherThreads = _showAllOtherThreads
                   ? otherThreads
-                  : otherThreads.take(2).toList();
+                  : otherThreads.take(3).toList();
               return Column(
                 children: [
                   if (pinnedThreads.isNotEmpty)
@@ -1338,7 +1581,7 @@ class _ThreadSectionState extends State<_ThreadSection> {
                     widget.onBlock,
                     widget.onReport,
                   ),
-                  if (otherThreads.length > 2)
+                  if (otherThreads.length > 3)
                     Align(
                       alignment: Alignment.centerLeft,
                       child: TextButton(
@@ -1712,7 +1955,7 @@ String _formatCount(int count) {
 }
 
 int _resolveUnreadCount(Map<String, dynamic> data, String userId) {
-  int _asInt(dynamic value) {
+  int asInt(dynamic value) {
     if (value is num) {
       return value.toInt();
     }
@@ -1723,13 +1966,15 @@ int _resolveUnreadCount(Map<String, dynamic> data, String userId) {
   }
 
   final unreadCounts = (data['unreadCounts'] as Map?)?.cast<String, dynamic>();
-  final directCount = _asInt(unreadCounts?[userId]);
-  if (directCount > 0) {
-    return directCount;
-  }
-  final fallbackCount = _asInt(data['unreadCounts.$userId']);
-  if (fallbackCount > 0) {
-    return fallbackCount;
+  final hasDirectUnread = unreadCounts?.containsKey(userId) == true;
+  final directCount = asInt(unreadCounts?[userId]);
+  final hasFallbackUnread = data.containsKey('unreadCounts.$userId');
+  final fallbackCount = asInt(data['unreadCounts.$userId']);
+  if (hasDirectUnread || hasFallbackUnread) {
+    final merged = directCount > fallbackCount ? directCount : fallbackCount;
+    if (merged > 0) {
+      return merged;
+    }
   }
   final lastSenderId = data['lastSenderId']?.toString();
   final lastMessageAtValue = data['lastMessageAt'];
@@ -1745,18 +1990,36 @@ int _resolveUnreadCount(Map<String, dynamic> data, String userId) {
     lastMessageAt = DateTime.tryParse(lastMessageAtClientValue);
   }
   final lastReadAtMap = (data['lastReadAt'] as Map?)?.cast<String, dynamic>();
+  final lastReadAtClientMap =
+      (data['lastReadAtClient'] as Map?)?.cast<String, dynamic>();
   DateTime? lastReadAt;
   final lastReadValue = lastReadAtMap?[userId] ?? data['lastReadAt.$userId'];
+  final lastReadClientValue =
+      lastReadAtClientMap?[userId] ?? data['lastReadAtClient.$userId'];
   if (lastReadValue is Timestamp) {
     lastReadAt = lastReadValue.toDate();
   } else if (lastReadValue is String) {
     lastReadAt = DateTime.tryParse(lastReadValue);
+  }
+  DateTime? lastReadAtClient;
+  if (lastReadClientValue is Timestamp) {
+    lastReadAtClient = lastReadClientValue.toDate();
+  } else if (lastReadClientValue is String) {
+    lastReadAtClient = DateTime.tryParse(lastReadClientValue);
+  }
+  if (lastReadAtClient != null &&
+      (lastReadAt == null || lastReadAtClient.isAfter(lastReadAt))) {
+    lastReadAt = lastReadAtClient;
   }
   if (lastSenderId != null &&
       lastSenderId != userId &&
       lastMessageAt != null &&
       (lastReadAt == null || lastMessageAt.isAfter(lastReadAt))) {
     return 1;
+  }
+  if (hasDirectUnread || hasFallbackUnread) {
+    final merged = directCount > fallbackCount ? directCount : fallbackCount;
+    return merged < 0 ? 0 : merged;
   }
   return directCount > 0 ? directCount : fallbackCount;
 }
@@ -1920,6 +2183,8 @@ class _MatchCard extends StatelessWidget {
     this.showPremiumRow = true,
     this.onTapCount,
     this.onTapTitle,
+    this.oneLiner = '',
+    this.onTapOneLiner,
   });
 
   final String title;
@@ -1930,6 +2195,8 @@ class _MatchCard extends StatelessWidget {
   final bool showPremiumRow;
   final VoidCallback? onTapCount;
   final VoidCallback? onTapTitle;
+  final String oneLiner;
+  final VoidCallback? onTapOneLiner;
 
   @override
   Widget build(BuildContext context) {
@@ -2009,12 +2276,29 @@ class _MatchCard extends StatelessWidget {
             const SizedBox(height: 8),
           ],
           Row(
-            children: const [
-              Icon(Icons.person_outline, color: Color(0xFFB8B8B8), size: 18),
-              SizedBox(width: 6),
-              Text(
-                '추억연결: 우리 반이었나요',
-                style: TextStyle(fontSize: 12, color: Color(0xFFB8B8B8)),
+            children: [
+              const Icon(
+                Icons.person_outline,
+                color: Color(0xFFB8B8B8),
+                size: 18,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: InkWell(
+                  onTap: onTapOneLiner,
+                  borderRadius: BorderRadius.circular(6),
+                  child: Text(
+                    oneLiner.trim().isEmpty
+                        ? '나의 한줄: 입력하기'
+                        : '나의 한줄: $oneLiner',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFFB8B8B8),
+                    ),
+                  ),
+                ),
               ),
             ],
           ),

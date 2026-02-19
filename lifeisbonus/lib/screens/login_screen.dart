@@ -7,7 +7,9 @@ import 'package:kakao_flutter_sdk_user/kakao_flutter_sdk_user.dart';
 import 'package:flutter_naver_login/flutter_naver_login.dart';
 import 'package:flutter_naver_login/interface/types/naver_login_status.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../services/age_gate_service.dart';
 import 'home_screen.dart';
 import 'sign_up_screen.dart';
 import 'google_profile_screen.dart';
@@ -22,6 +24,10 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  static const String _privacyPolicyUrl =
+      'https://sore-spatula-c9f.notion.site/30bf010910c6806f8dfce301204521db';
+  static const String _termsOfServiceUrl =
+      'https://sore-spatula-c9f.notion.site/30bf010910c6800a89fdd655046839d4';
   static const String _kakaoNativeAppKey = String.fromEnvironment(
     'KAKAO_NATIVE_APP_KEY',
     defaultValue: '2fb2536b99bf76097001386b2837c5ce',
@@ -46,6 +52,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _phoneCodeController = TextEditingController();
   bool _isLoading = false;
   bool _isVerifying = false;
+  bool _isSocialLoading = false;
   bool _smsCodeSent = false;
   bool _phoneVerified = false;
   String? _phoneVerificationId;
@@ -81,6 +88,13 @@ class _LoginScreenState extends State<LoginScreen> {
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
         await _storeLastProvider('firebase', user.uid);
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+        if (await _handleUnderAgeIfNeeded(userDoc.data()?['birthDate'])) {
+          return;
+        }
       }
       if (!mounted) {
         return;
@@ -96,9 +110,7 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => const HomeScreen(),
-        ),
+        MaterialPageRoute(builder: (context) => const HomeScreen()),
       );
     } on FirebaseAuthException catch (error) {
       if (!mounted) {
@@ -278,6 +290,13 @@ class _LoginScreenState extends State<LoginScreen> {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       await _storeLastProvider('firebase', user.uid);
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      if (await _handleUnderAgeIfNeeded(userDoc.data()?['birthDate'])) {
+        return;
+      }
     }
     if (!mounted) {
       return;
@@ -293,9 +312,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (context) => const HomeScreen(),
-      ),
+      MaterialPageRoute(builder: (context) => const HomeScreen()),
     );
   }
 
@@ -327,44 +344,81 @@ class _LoginScreenState extends State<LoginScreen> {
           .get();
       final data = doc.data();
       final hasBirthDate = data != null && data['birthDate'] != null;
-      final hasNickname = data != null &&
+      final hasNickname =
+          data != null &&
           data['displayName'] is String &&
           (data['displayName'] as String).trim().isNotEmpty;
+      if (await _handleUnderAgeIfNeeded(data?['birthDate'])) {
+        return;
+      }
 
       if (!mounted) {
         return;
       }
 
       if (hasBirthDate && hasNickname) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('로그인에 성공했습니다.')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('로그인에 성공했습니다.')));
         await Future<void>.delayed(const Duration(milliseconds: 600));
         if (!mounted) {
           return;
         }
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => const HomeScreen(),
-          ),
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
         );
       } else {
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => const GoogleProfileScreen(),
-          ),
+          MaterialPageRoute(builder: (context) => const GoogleProfileScreen()),
         );
       }
     } on FirebaseAuthException catch (error) {
       if (!mounted) {
         return;
       }
+      if (_isLoginCancelled(error)) {
+        return;
+      }
       _showError(_messageForAuthError(error));
-    } catch (_) {
+    } catch (error) {
       if (!mounted) {
         return;
       }
+      if (_isLoginCancelled(error)) {
+        return;
+      }
       _showError('구글 로그인 중 문제가 발생했습니다.');
+    }
+  }
+
+  Future<void> _runSocialLogin(
+    Future<void> Function() action, {
+    required String providerLabel,
+  }) async {
+    if (_isSocialLoading) {
+      return;
+    }
+    setState(() {
+      _isSocialLoading = true;
+    });
+    try {
+      await action();
+    } catch (error, stackTrace) {
+      debugPrint('[$providerLabel-login] unhandled error: $error');
+      debugPrint('[$providerLabel-login] stack: $stackTrace');
+      if (!mounted) {
+        return;
+      }
+      if (_isLoginCancelled(error)) {
+        return;
+      }
+      _showError('$providerLabel 로그인 중 문제가 발생했습니다.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSocialLoading = false;
+        });
+      }
     }
   }
 
@@ -409,9 +463,13 @@ class _LoginScreenState extends State<LoginScreen> {
           .get();
       final data = doc.data();
       final hasBirthDate = data != null && data['birthDate'] != null;
-      final hasNickname = data != null &&
+      final hasNickname =
+          data != null &&
           data['displayName'] is String &&
           (data['displayName'] as String).trim().isNotEmpty;
+      if (await _handleUnderAgeIfNeeded(data?['birthDate'])) {
+        return;
+      }
 
       if (!mounted) {
         return;
@@ -430,9 +488,7 @@ class _LoginScreenState extends State<LoginScreen> {
           return;
         }
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => const HomeScreen(),
-          ),
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
         );
       } else {
         Navigator.of(context).pushReplacement(
@@ -449,18 +505,78 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) {
         return;
       }
-      _showError('카카오 로그인에 실패했습니다. (${error.error} / ${error.errorDescription})');
+      if (_isKakaoLoginCancelled(error)) {
+        return;
+      }
+      _showError(
+        '카카오 로그인에 실패했습니다. (${error.error} / ${error.errorDescription})',
+      );
     } on KakaoClientException catch (error) {
       if (!mounted) {
         return;
       }
+      if (_isKakaoLoginCancelled(error)) {
+        return;
+      }
       _showError('카카오 로그인에 실패했습니다. (${error.msg})');
-    } catch (_) {
+    } catch (error) {
       if (!mounted) {
+        return;
+      }
+      if (_isKakaoLoginCancelled(error)) {
         return;
       }
       _showError('카카오 로그인 중 문제가 발생했습니다.');
     }
+  }
+
+  bool _isKakaoLoginCancelled(Object error) {
+    return _isLoginCancelled(error);
+  }
+
+  bool _isLoginCancelled(Object error) {
+    if (error is FirebaseAuthException) {
+      final code = error.code.toLowerCase();
+      if (code.contains('cancel') ||
+          code.contains('aborted') ||
+          code.contains('popup-closed-by-user') ||
+          code.contains('web-context-cancelled')) {
+        return true;
+      }
+    }
+
+    if (error is PlatformException) {
+      final code = error.code.toLowerCase();
+      final message = (error.message ?? '').toLowerCase();
+      if (code.contains('cancel') ||
+          code.contains('canceled') ||
+          code.contains('cancelled') ||
+          code.contains('aborted') ||
+          code.contains('sign_in_canceled') ||
+          code.contains('popup_closed_by_user') ||
+          message.contains('cancel') ||
+          message.contains('canceled') ||
+          message.contains('cancelled') ||
+          message.contains('aborted') ||
+          message.contains('user cancelled') ||
+          message.contains('user canceled') ||
+          message.contains('closed by user') ||
+          message.contains('access_denied')) {
+        return true;
+      }
+    }
+
+    final text = error.toString().toLowerCase();
+    return text.contains('cancel') ||
+        text.contains('canceled') ||
+        text.contains('cancelled') ||
+        text.contains('aborted') ||
+        text.contains('dismissed') ||
+        text.contains('closed by user') ||
+        text.contains('popup_closed_by_user') ||
+        text.contains('sign_in_canceled') ||
+        text.contains('access_denied') ||
+        text.contains('gidsignin') && text.contains('error -5');
   }
 
   Future<void> _handleNaverLogin() async {
@@ -474,7 +590,8 @@ class _LoginScreenState extends State<LoginScreen> {
       await _clearAuthSessions();
       final result = await FlutterNaverLogin.logIn();
       if (result.status != NaverLoginStatus.loggedIn) {
-        _showError('네이버 로그인에 실패했습니다.');
+        // 로그인 화면에서 사용자가 취소한 경우를 포함해
+        // 비로그인 상태는 조용히 반환한다.
         return;
       }
 
@@ -493,9 +610,13 @@ class _LoginScreenState extends State<LoginScreen> {
           .get();
       final data = doc.data();
       final hasBirthDate = data != null && data['birthDate'] != null;
-      final hasNickname = data != null &&
+      final hasNickname =
+          data != null &&
           data['displayName'] is String &&
           (data['displayName'] as String).trim().isNotEmpty;
+      if (await _handleUnderAgeIfNeeded(data?['birthDate'])) {
+        return;
+      }
 
       if (!mounted) {
         return;
@@ -515,9 +636,7 @@ class _LoginScreenState extends State<LoginScreen> {
           return;
         }
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => const HomeScreen(),
-          ),
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
         );
       } else {
         Navigator.of(context).pushReplacement(
@@ -530,8 +649,11 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         );
       }
-    } catch (_) {
+    } catch (error) {
       if (!mounted) {
+        return;
+      }
+      if (_isLoginCancelled(error)) {
         return;
       }
       _showError('네이버 로그인 중 문제가 발생했습니다.');
@@ -556,16 +678,60 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
+
+  Future<void> _openUrlWithRetry({
+    required String url,
+    required String label,
+  }) async {
+    while (mounted) {
+      final opened = await launchUrl(
+        Uri.parse(url),
+        mode: LaunchMode.externalApplication,
+      );
+      if (opened || !mounted) {
+        return;
+      }
+      final retry = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('$label 열기 실패'),
+          content: const Text('페이지를 열 수 없어요. 다시 시도할까요?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('닫기'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('재시도'),
+            ),
+          ],
+        ),
+      );
+      if (retry != true) {
+        return;
+      }
+    }
+  }
+
+  Future<void> _openPrivacyPolicy() =>
+      _openUrlWithRetry(url: _privacyPolicyUrl, label: '개인정보 처리방침');
+
+  Future<void> _openTermsOfService() =>
+      _openUrlWithRetry(url: _termsOfServiceUrl, label: '서비스 이용약관');
 
   Future<void> _clearAuthSessions() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       await FirebaseAuth.instance.signOut();
     }
+    try {
+      await GoogleSignIn().signOut();
+    } catch (_) {}
     try {
       await UserApi.instance.logout();
     } catch (_) {}
@@ -580,9 +746,38 @@ class _LoginScreenState extends State<LoginScreen> {
     await prefs.setString('lastProviderId', id);
   }
 
+  Future<bool> _handleUnderAgeIfNeeded(dynamic birthDateRaw) async {
+    final birthDate = AgeGateService.parseBirthDate(birthDateRaw);
+    if (birthDate == null) {
+      return false;
+    }
+    if (AgeGateService.isAllowed(birthDate)) {
+      return false;
+    }
+    await _clearAuthSessions();
+    if (!mounted) {
+      return true;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('이용 제한'),
+        content: const Text('만 14세 미만은 회원가입 및 로그인이 불가합니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('확인'),
+          ),
+        ],
+      ),
+    );
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).padding.bottom;
+    final safeBottomInset = MediaQuery.of(context).padding.bottom;
+    final keyboardInset = MediaQuery.of(context).viewInsets.bottom;
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: const SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
@@ -596,10 +791,7 @@ class _LoginScreenState extends State<LoginScreen> {
         body: DecoratedBox(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [
-                Color(0xFFFFF4E6),
-                Color(0xFFFCE7F1),
-              ],
+              colors: [Color(0xFFFFF4E6), Color(0xFFFCE7F1)],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -609,62 +801,91 @@ class _LoginScreenState extends State<LoginScreen> {
               bottom: false,
               child: LayoutBuilder(
                 builder: (context, constraints) {
+                  final allowScroll =
+                      keyboardInset > 0 || constraints.maxHeight < 760;
                   return SingleChildScrollView(
-                    padding: EdgeInsets.fromLTRB(26, 0, 26, 24 + bottomInset),
+                    physics: allowScroll
+                        ? const ClampingScrollPhysics()
+                        : const NeverScrollableScrollPhysics(),
+                    padding: EdgeInsets.fromLTRB(
+                      26,
+                      0,
+                      26,
+                      24 + safeBottomInset + (keyboardInset > 0 ? 12 : 0),
+                    ),
                     child: ConstrainedBox(
                       constraints: BoxConstraints(
                         minHeight: constraints.maxHeight,
                       ),
-                    child: Column(
-                      children: [
-                        const SizedBox(height: 18),
-                        const _LoginHeader(),
-                        const SizedBox(height: 16),
-                        _MethodTabs(
-                          currentIndex: _methodIndex,
-                          onChanged: (index) {
-                            setState(() {
-                              _methodIndex = index;
-                              _smsCodeSent = false;
-                              _phoneVerified = false;
-                              _phoneVerificationId = null;
-                              _phoneCodeController.clear();
-                            });
-                          },
-                        ),
-                        const SizedBox(height: 26),
-                        _methodIndex == 0
-                            ? _LoginCard(
-                                emailController: _emailController,
-                                passwordController: _passwordController,
-                                isLoading: _isLoading,
-                                onLoginPressed: _handleEmailLogin,
-                              )
-                            : _PhoneLoginCard(
-                                countryCode: _countryCode,
-                                onSelectCountryCode: _selectCountryCode,
-                                phoneController: _phoneController,
-                                codeController: _phoneCodeController,
-                                smsCodeSent: _smsCodeSent,
-                                phoneVerified: _phoneVerified,
-                                isVerifying: _isVerifying,
-                                onSendCode: _sendPhoneCode,
-                                onVerifyCode: _verifyPhoneCode,
-                                onLoginPressed: _handlePhoneLogin,
-                              ),
-                        const SizedBox(height: 18),
-                        const _DividerOr(),
-                        const SizedBox(height: 18),
-                        _SocialButtons(
-                          onGooglePressed: _handleGoogleLogin,
-                          onKakaoPressed: _handleKakaoLogin,
-                          onNaverPressed: _handleNaverLogin,
-                        ),
-                        const SizedBox(height: 10),
-                        const _LegalText(),
-                        const SizedBox(height: 8),
-                      ],
-                    ),
+                      child: Column(
+                        children: [
+                          const SizedBox(height: 18),
+                          const _LoginHeader(),
+                          const SizedBox(height: 20),
+                          _MethodTabs(
+                            currentIndex: _methodIndex,
+                            onChanged: (index) {
+                              setState(() {
+                                _methodIndex = index;
+                                _smsCodeSent = false;
+                                _phoneVerified = false;
+                                _phoneVerificationId = null;
+                                _phoneCodeController.clear();
+                              });
+                            },
+                          ),
+                          const SizedBox(height: 26),
+                          _methodIndex == 0
+                              ? _LoginCard(
+                                  emailController: _emailController,
+                                  passwordController: _passwordController,
+                                  isLoading: _isLoading,
+                                  onLoginPressed: _handleEmailLogin,
+                                )
+                              : _PhoneLoginCard(
+                                  countryCode: _countryCode,
+                                  onSelectCountryCode: _selectCountryCode,
+                                  phoneController: _phoneController,
+                                  codeController: _phoneCodeController,
+                                  smsCodeSent: _smsCodeSent,
+                                  phoneVerified: _phoneVerified,
+                                  isVerifying: _isVerifying,
+                                  onSendCode: _sendPhoneCode,
+                                  onVerifyCode: _verifyPhoneCode,
+                                  onLoginPressed: _handlePhoneLogin,
+                                ),
+                          const SizedBox(height: 18),
+                          const _DividerOr(),
+                          const SizedBox(height: 18),
+                          _SocialButtons(
+                            onGooglePressed: () {
+                              _runSocialLogin(
+                                _handleGoogleLogin,
+                                providerLabel: '구글',
+                              );
+                            },
+                            onKakaoPressed: () {
+                              _runSocialLogin(
+                                _handleKakaoLogin,
+                                providerLabel: '카카오',
+                              );
+                            },
+                            onNaverPressed: () {
+                              _runSocialLogin(
+                                _handleNaverLogin,
+                                providerLabel: '네이버',
+                              );
+                            },
+                            isLoading: _isSocialLoading,
+                          ),
+                          const SizedBox(height: 10),
+                          _LegalText(
+                            onPrivacyTap: _openPrivacyPolicy,
+                            onTermsTap: _openTermsOfService,
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                      ),
                     ),
                   );
                 },
@@ -696,7 +917,7 @@ class _LoginHeader extends StatelessWidget {
             Text(
               '인생은 보너스',
               style: TextStyle(
-                fontSize: 22,
+                fontSize: 24,
                 fontWeight: FontWeight.w600,
                 color: Color(0xFFFF7A3D),
               ),
@@ -706,10 +927,7 @@ class _LoginHeader extends StatelessWidget {
         const SizedBox(height: 6),
         const Text(
           '당신의 보너스 게임을 시작해보세요',
-          style: TextStyle(
-            fontSize: 12,
-            color: Color(0xFF9B9B9B),
-          ),
+          style: TextStyle(fontSize: 12, color: Color(0xFF9B9B9B)),
         ),
       ],
     );
@@ -717,10 +935,7 @@ class _LoginHeader extends StatelessWidget {
 }
 
 class _MethodTabs extends StatelessWidget {
-  const _MethodTabs({
-    required this.currentIndex,
-    required this.onChanged,
-  });
+  const _MethodTabs({required this.currentIndex, required this.onChanged});
 
   final int currentIndex;
   final ValueChanged<int> onChanged;
@@ -871,18 +1086,13 @@ class _LoginCard extends StatelessWidget {
           GestureDetector(
             onTap: () {
               Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => const SignUpScreen(),
-                ),
+                MaterialPageRoute(builder: (context) => const SignUpScreen()),
               );
             },
             child: Text.rich(
               TextSpan(
                 text: '계정이 없으신가요? ',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Color(0xFF8A8A8A),
-                ),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
                 children: [
                   TextSpan(
                     text: '회원가입',
@@ -1041,8 +1251,9 @@ class _PhoneLoginCard extends StatelessWidget {
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    backgroundColor:
-                        phoneVerified ? const Color(0xFFE6F7ED) : null,
+                    backgroundColor: phoneVerified
+                        ? const Color(0xFFE6F7ED)
+                        : null,
                   ),
                   child: Text(
                     phoneVerified
@@ -1092,18 +1303,13 @@ class _PhoneLoginCard extends StatelessWidget {
           GestureDetector(
             onTap: () {
               Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => const SignUpScreen(),
-                ),
+                MaterialPageRoute(builder: (context) => const SignUpScreen()),
               );
             },
             child: Text.rich(
               TextSpan(
                 text: '계정이 없으신가요? ',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Color(0xFF8A8A8A),
-                ),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
                 children: [
                   TextSpan(
                     text: '회원가입',
@@ -1159,15 +1365,14 @@ class _LabeledField extends StatelessWidget {
           enabled: enabled,
           decoration: InputDecoration(
             hintText: hintText,
-            hintStyle: const TextStyle(
-              fontSize: 12,
-              color: Color(0xFFB6B6B6),
-            ),
+            hintStyle: const TextStyle(fontSize: 12, color: Color(0xFFB6B6B6)),
             filled: true,
             fillColor: const Color(0xFFF7F7F7),
             suffixIcon: trailing,
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 12,
+            ),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
               borderSide: BorderSide.none,
@@ -1204,10 +1409,7 @@ class _LoginButton extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
             gradient: const LinearGradient(
-              colors: [
-                Color(0xFFFF7A3D),
-                Color(0xFFFF4FA6),
-              ],
+              colors: [Color(0xFFFF7A3D), Color(0xFFFF4FA6)],
             ),
           ),
           child: Center(
@@ -1242,21 +1444,14 @@ class _DividerOr extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        const Expanded(
-          child: Divider(color: Color(0xFFE0E0E0), thickness: 1),
-        ),
+        const Expanded(child: Divider(color: Color(0xFFE0E0E0), thickness: 1)),
         const SizedBox(width: 10),
         const Text(
           '또는',
-          style: TextStyle(
-            fontSize: 12,
-            color: Color(0xFF9B9B9B),
-          ),
+          style: TextStyle(fontSize: 12, color: Color(0xFF9B9B9B)),
         ),
         const SizedBox(width: 10),
-        const Expanded(
-          child: Divider(color: Color(0xFFE0E0E0), thickness: 1),
-        ),
+        const Expanded(child: Divider(color: Color(0xFFE0E0E0), thickness: 1)),
       ],
     );
   }
@@ -1267,56 +1462,64 @@ class _SocialButtons extends StatelessWidget {
     required this.onGooglePressed,
     required this.onKakaoPressed,
     required this.onNaverPressed,
+    this.isLoading = false,
   });
 
   final VoidCallback onGooglePressed;
   final VoidCallback onKakaoPressed;
   final VoidCallback onNaverPressed;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        _SocialButton(
-          label: 'Google로 시작하기',
-          background: Colors.white,
-          textColor: const Color(0xFF5E5E5E),
-          borderColor: const Color(0xFFE2E2E2),
-          icon: Image.asset(
-            'assets/logos/google-logo.png',
-            width: 18,
-            height: 18,
-            fit: BoxFit.contain,
-          ),
-          onPressed: onGooglePressed,
+    return AbsorbPointer(
+      absorbing: isLoading,
+      child: Opacity(
+        opacity: isLoading ? 0.7 : 1,
+        child: Column(
+          children: [
+            _SocialButton(
+              label: 'Google로 시작하기',
+              background: Colors.white,
+              textColor: const Color(0xFF5E5E5E),
+              borderColor: const Color(0xFFE2E2E2),
+              icon: Image.asset(
+                'assets/logos/google-logo.png',
+                width: 18,
+                height: 18,
+                fit: BoxFit.contain,
+              ),
+              onPressed: onGooglePressed,
+            ),
+            const SizedBox(height: 12),
+            _SocialButton(
+              label: '카카오로 시작하기',
+              background: Color(0xFFFEE500),
+              textColor: Color(0xFF3C1E1E),
+              icon: Image.asset(
+                'assets/logos/kakao-logo.png',
+                width: 22,
+                height: 22,
+                fit: BoxFit.contain,
+              ),
+              onPressed: onKakaoPressed,
+            ),
+            const SizedBox(height: 12),
+            _SocialButton(
+              label: '네이버로 시작하기',
+              background: Color(0xFF03C75A),
+              textColor: Colors.white,
+              icon: Image.asset(
+                'assets/logos/naver-logo.png',
+                width: 24,
+                height: 24,
+                fit: BoxFit.contain,
+              ),
+              onPressed: onNaverPressed,
+            ),
+          ],
         ),
-        const SizedBox(height: 12),
-        _SocialButton(
-          label: '카카오로 시작하기',
-          background: Color(0xFFFEE500),
-          textColor: Color(0xFF3C1E1E),
-          icon: Image.asset(
-            'assets/logos/kakao-logo.png',
-            width: 22,
-            height: 22,
-            fit: BoxFit.contain,
-          ),
-          onPressed: onKakaoPressed,
-        ),
-        const SizedBox(height: 12),
-        _SocialButton(
-          label: '네이버로 시작하기',
-          background: Color(0xFF03C75A),
-          textColor: Colors.white,
-          icon: Image.asset(
-            'assets/logos/naver-logo.png',
-            width: 24,
-            height: 24,
-            fit: BoxFit.contain,
-          ),
-          onPressed: onNaverPressed,
-        ),
-      ],
+      ),
     );
   }
 }
@@ -1374,31 +1577,58 @@ class _SocialButton extends StatelessWidget {
 }
 
 class _LegalText extends StatelessWidget {
-  const _LegalText();
+  const _LegalText({required this.onPrivacyTap, required this.onTermsTap});
+
+  final VoidCallback onPrivacyTap;
+  final VoidCallback onTermsTap;
 
   @override
   Widget build(BuildContext context) {
-    return const Text.rich(
-      TextSpan(
-        style: TextStyle(
-          fontSize: 11,
-          height: 1.5,
-          color: Color(0xFFB0B0B0),
+    const textStyle = TextStyle(
+      fontSize: 11,
+      height: 1.5,
+      color: Color(0xFFB0B0B0),
+    );
+    return Column(
+      children: [
+        Wrap(
+          alignment: WrapAlignment.center,
+          children: [
+            const Text('회원가입 및 로그인 시 ', style: textStyle),
+            GestureDetector(
+              onTap: onPrivacyTap,
+              child: const Text(
+                '개인정보 처리방침',
+                style: TextStyle(
+                  fontSize: 11,
+                  height: 1.5,
+                  color: Color(0xFFB0B0B0),
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+            ),
+            const Text(',', style: textStyle),
+          ],
         ),
-        children: [
-          TextSpan(text: '회원 가입 및 로그인 시 '),
-          TextSpan(
-            text: '개인정보 처리방침,\n',
-            style: TextStyle(decoration: TextDecoration.underline),
-          ),
-          TextSpan(
-            text: '서비스 이용약관',
-            style: TextStyle(decoration: TextDecoration.underline),
-          ),
-          TextSpan(text: '에 동의하시는 것을 의미합니다.'),
-        ],
-      ),
-      textAlign: TextAlign.center,
+        Wrap(
+          alignment: WrapAlignment.center,
+          children: [
+            GestureDetector(
+              onTap: onTermsTap,
+              child: const Text(
+                '서비스 이용약관',
+                style: TextStyle(
+                  fontSize: 11,
+                  height: 1.5,
+                  color: Color(0xFFB0B0B0),
+                  decoration: TextDecoration.underline,
+                ),
+              ),
+            ),
+            const Text('에 동의하시는 것을 의미합니다.', style: textStyle),
+          ],
+        ),
+      ],
     );
   }
 }

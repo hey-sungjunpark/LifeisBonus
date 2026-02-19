@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
+import '../services/age_gate_service.dart';
 import 'home_screen.dart';
 
 class GoogleProfileScreen extends StatefulWidget {
@@ -297,6 +298,12 @@ class _GoogleProfileScreenState extends State<GoogleProfileScreen> {
     if (_birthDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('생년월일을 선택해주세요.')),
+      );
+      return;
+    }
+    if (!AgeGateService.isAllowed(_birthDate!)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('만 14세 미만은 회원가입 및 로그인이 불가합니다.')),
       );
       return;
     }

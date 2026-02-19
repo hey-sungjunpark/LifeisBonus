@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -15,6 +18,11 @@ import 'services/push_notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('[global-error] $error');
+    debugPrint('[global-error-stack] $stack');
+    return true;
+  };
   const kakaoNativeAppKey = String.fromEnvironment(
     'KAKAO_NATIVE_APP_KEY',
     defaultValue: '2fb2536b99bf76097001386b2837c5ce',
@@ -28,8 +36,16 @@ Future<void> main() async {
   await HealthActivityAliasStore.instance.load();
   await FirebaseFirestore.instance.clearPersistence();
   FirebaseFirestore.instance.settings = const Settings(persistenceEnabled: false);
-  await PushNotificationService.initialize();
   runApp(const LifeIsBonusApp());
+  unawaited(_initializeBackgroundServices());
+}
+
+Future<void> _initializeBackgroundServices() async {
+  try {
+    await PushNotificationService.initialize().timeout(const Duration(seconds: 8));
+  } catch (e) {
+    debugPrint('[push-init] delayed init failed: $e');
+  }
 }
 
 class LifeIsBonusApp extends StatelessWidget {

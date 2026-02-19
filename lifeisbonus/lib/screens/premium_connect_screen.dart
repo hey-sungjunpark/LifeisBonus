@@ -1,8 +1,12 @@
 import 'dart:ui';
+import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:in_app_purchase/in_app_purchase.dart';
 
+import '../services/iap_subscription_service.dart';
 import '../services/match_count_service.dart';
 import '../services/premium_service.dart';
 import '../utils/institution_alias_store.dart';
@@ -17,7 +21,12 @@ class PremiumConnectScreen extends StatefulWidget {
 
 class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
   final ScrollController _scrollController = ScrollController();
+  StreamSubscription<IapEvent>? _iapEventSub;
   bool _loading = true;
+  bool _purchaseInProgress = false;
+  bool _restoring = false;
+  bool _loadingProducts = true;
+  List<ProductDetails> _products = const [];
   PremiumStatus? _status;
   int _schoolMatchCount = 0;
   int _neighborhoodMatchCount = 0;
@@ -34,13 +43,65 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
   @override
   void initState() {
     super.initState();
+    _initIap();
     _loadPremium();
   }
 
   @override
   void dispose() {
+    _iapEventSub?.cancel();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Future<void> _initIap() async {
+    _iapEventSub = IapSubscriptionService.instance.events.listen((event) async {
+      if (!mounted) {
+        return;
+      }
+      if (event.type == IapEventType.pending) {
+        setState(() {
+          _purchaseInProgress = true;
+        });
+        return;
+      }
+      setState(() {
+        _purchaseInProgress = false;
+        _restoring = false;
+      });
+      if (event.type == IapEventType.error) {
+        _showSnack(event.message ?? '결제 처리 중 오류가 발생했습니다.');
+      }
+      if (event.type == IapEventType.purchased ||
+          event.type == IapEventType.restored) {
+        await _loadPremium();
+        _showSnack(
+          event.type == IapEventType.restored
+              ? '구독 구매 내역이 복원되었습니다.'
+              : '프리미엄 구독이 활성화되었습니다.',
+        );
+      }
+    });
+    try {
+      await IapSubscriptionService.instance.initialize();
+      final products = await IapSubscriptionService.instance.queryProducts();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _products = products;
+      });
+    } catch (e) {
+      if (mounted) {
+        _showSnack('구독 상품 정보를 불러오지 못했어요. (${e.toString().replaceAll('Exception: ', '')})');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingProducts = false;
+        });
+      }
+    }
   }
 
   Future<void> _loadPremium() async {
@@ -505,9 +566,50 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
     return PlanCityAliasStore.instance.normalize(value);
   }
 
+  void _showSnack(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Future<void> _subscribe() async {
-    await PremiumService.activateMonthly();
-    await _loadPremium();
+    if (_products.isEmpty) {
+      _showSnack('스토어 상품 정보를 불러오는 중입니다. 잠시 후 다시 시도해 주세요.');
+      return;
+    }
+    setState(() {
+      _purchaseInProgress = true;
+    });
+    try {
+      await IapSubscriptionService.instance.buy(_products.first);
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _purchaseInProgress = false;
+      });
+      _showSnack('결제를 시작할 수 없어요. (${e.toString().replaceAll('Exception: ', '')})');
+    }
+  }
+
+  Future<void> _restorePurchases() async {
+    setState(() {
+      _restoring = true;
+    });
+    try {
+      await IapSubscriptionService.instance.restore();
+      _showSnack('구매 내역 복원을 요청했습니다.');
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _restoring = false;
+      });
+      _showSnack('복원 요청에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})');
+    }
   }
 
   Future<void> _scrollToTopForSubscribe() async {
@@ -546,7 +648,14 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
                   _PremiumHeader(isPremium: isPremium),
                   const SizedBox(height: 16),
                   if (!isPremium) ...[
-                    _SubscribeCard(onSubscribe: _subscribe),
+                    _SubscribeCard(
+                      onSubscribe: _subscribe,
+                      onRestore: _restorePurchases,
+                      purchaseInProgress: _purchaseInProgress,
+                      restoring: _restoring,
+                      loadingProducts: _loadingProducts,
+                      isIOS: Platform.isIOS,
+                    ),
                     const SizedBox(height: 16),
                   ] else ...[
                     _TotalMatchCard(totalCount: totalCount),
@@ -949,9 +1058,21 @@ class _MatchSummaryCard extends StatelessWidget {
 }
 
 class _SubscribeCard extends StatelessWidget {
-  const _SubscribeCard({required this.onSubscribe});
+  const _SubscribeCard({
+    required this.onSubscribe,
+    required this.onRestore,
+    required this.purchaseInProgress,
+    required this.restoring,
+    required this.loadingProducts,
+    required this.isIOS,
+  });
 
   final VoidCallback onSubscribe;
+  final VoidCallback onRestore;
+  final bool purchaseInProgress;
+  final bool restoring;
+  final bool loadingProducts;
+  final bool isIOS;
 
   @override
   Widget build(BuildContext context) {
@@ -963,6 +1084,27 @@ class _SubscribeCard extends StatelessWidget {
       ),
       child: Column(
         children: [
+          Row(
+            children: [
+              const Spacer(),
+              TextButton(
+                onPressed: (restoring || purchaseInProgress) ? null : onRestore,
+                child: restoring
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(
+                        isIOS ? '구매 복원 (App Store)' : '구매 복원',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+              ),
+            ],
+          ),
           const Text(
             '월 9,900원으로 소중한 인연 만들기',
             style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
@@ -978,21 +1120,42 @@ class _SubscribeCard extends StatelessWidget {
             width: double.infinity,
             height: 46,
             child: ElevatedButton(
-              onPressed: onSubscribe,
+              onPressed: (purchaseInProgress || loadingProducts) ? null : onSubscribe,
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFFF7A3D),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(14),
                 ),
               ),
-              child: const Text(
-                '구독 시작하기',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
+              child: purchaseInProgress
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    )
+                  : Text(
+                      loadingProducts ? '상품 조회 중...' : '구독 시작하기',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
             ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '결제/환불은 App Store 및 Google Play 정책이 적용됩니다.',
+            style: TextStyle(fontSize: 10, color: Color(0xFF8A8A8A)),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 2),
+          const Text(
+            '해지는 스토어 구독 관리에서 직접 진행할 수 있어요.',
+            style: TextStyle(fontSize: 10, color: Color(0xFF8A8A8A)),
+            textAlign: TextAlign.center,
           ),
         ],
       ),

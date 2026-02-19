@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../services/premium_service.dart';
+import '../utils/match_one_liner_store.dart';
 import 'message_chat_screen.dart';
 
 class MessageMatchDetailScreen extends StatefulWidget {
@@ -11,12 +12,16 @@ class MessageMatchDetailScreen extends StatefulWidget {
     required this.subtitle,
     required this.matchKeys,
     this.presetUserIds = const [],
+    this.matchType,
+    this.matchKey,
   });
 
   final String title;
   final String subtitle;
   final List<String> matchKeys;
   final List<String> presetUserIds;
+  final String? matchType;
+  final String? matchKey;
 
   @override
   State<MessageMatchDetailScreen> createState() =>
@@ -41,6 +46,23 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
     if (userDocId == null) {
       return [];
     }
+    Future<String?> loadOneLinerForUser(String otherUserId) async {
+      final matchType = widget.matchType?.trim() ?? '';
+      final matchKey = widget.matchKey?.trim() ?? '';
+      if (matchType.isEmpty || matchKey.isEmpty) {
+        return null;
+      }
+      try {
+        return MatchOneLinerStore.loadForUser(
+          userDocId: otherUserId,
+          matchType: matchType,
+          matchKey: matchKey,
+        );
+      } catch (_) {
+        return null;
+      }
+    }
+
     if (widget.presetUserIds.isNotEmpty) {
       final users = <_MatchedUser>[];
       for (final id in widget.presetUserIds.toSet()) {
@@ -72,6 +94,7 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
             photoUrl: photoUrl,
             statusMessage: statusMessage,
             lastActiveAt: lastActiveAt,
+            oneLiner: await loadOneLinerForUser(id),
           ),
         );
       }
@@ -127,6 +150,7 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
           photoUrl: photoUrl,
           statusMessage: statusMessage,
           lastActiveAt: lastActiveAt,
+          oneLiner: await loadOneLinerForUser(resolvedId),
         );
       }
     }
@@ -269,6 +293,7 @@ class _MatchedUser {
     this.photoUrl,
     this.statusMessage,
     this.lastActiveAt,
+    this.oneLiner,
   });
 
   final String id;
@@ -278,6 +303,7 @@ class _MatchedUser {
   final String? photoUrl;
   final String? statusMessage;
   final DateTime? lastActiveAt;
+  final String? oneLiner;
 
   int? get matchYear {
     final digits = matchSubtitle.replaceAll(RegExp(r'[^0-9]'), '');
@@ -295,6 +321,7 @@ class _MatchedUserCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = user.statusMessage?.trim();
+    final oneLiner = user.oneLiner?.trim();
     final lastActive = user.lastActiveAt;
     final activeLabel = lastActive == null
         ? null
@@ -349,6 +376,13 @@ class _MatchedUserCard extends StatelessWidget {
               Text(
                 status,
                 style: const TextStyle(fontSize: 11, color: Color(0xFF7A7A7A)),
+              ),
+            ],
+            if (oneLiner != null && oneLiner.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                '한줄 메세지: $oneLiner',
+                style: const TextStyle(fontSize: 11, color: Color(0xFF8A8A8A)),
               ),
             ],
             if (activeLabel != null) ...[
@@ -525,6 +559,7 @@ class MatchProfileDetailScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = user.statusMessage?.trim();
+    final oneLiner = user.oneLiner?.trim();
     return Scaffold(
       appBar: AppBar(title: const Text('프로필 상세')),
       body: SingleChildScrollView(
@@ -544,19 +579,29 @@ class MatchProfileDetailScreen extends StatelessWidget {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  if (status != null && status.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      status,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF7A7A7A),
-                      ),
-                    ),
-                  ],
-                ],
+            if (status != null && status.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                status,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF7A7A7A),
+                ),
               ),
-            ),
+            ],
+            if (oneLiner != null && oneLiner.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                '한줄 메세지: $oneLiner',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF8A8A8A),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
             const SizedBox(height: 20),
             const Text(
               '매칭 정보',

@@ -151,9 +151,11 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
     if (_threadRef == null || _userDocId == null) {
       return;
     }
+    final nowIso = DateTime.now().toIso8601String();
     await _threadRef!.set({
       'unreadCounts.${_userDocId!}': 0,
       'lastReadAt.${_userDocId!}': FieldValue.serverTimestamp(),
+      'lastReadAtClient.${_userDocId!}': nowIso,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
@@ -194,6 +196,7 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
         'unreadCounts.${widget.otherUserId}': FieldValue.increment(1),
         'unreadCounts.${_userDocId!}': 0,
         'lastReadAt.${_userDocId!}': FieldValue.serverTimestamp(),
+        'lastReadAtClient.${_userDocId!}': now.toIso8601String(),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     } catch (_) {
@@ -233,58 +236,6 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
       return sentAt;
     }
     return _parseTimestamp(data['clientSentAt']);
-  }
-
-  int _resolveUnreadCount(Map<String, dynamic> data, String userId) {
-    int asInt(dynamic value) {
-      if (value is num) {
-        return value.toInt();
-      }
-      if (value is String) {
-        return int.tryParse(value.trim()) ?? 0;
-      }
-      return 0;
-    }
-
-    final unreadCounts =
-        (data['unreadCounts'] as Map?)?.cast<String, dynamic>();
-    final directCount = asInt(unreadCounts?[userId]);
-    if (directCount > 0) {
-      return directCount;
-    }
-    final fallbackCount = asInt(data['unreadCounts.$userId']);
-    if (fallbackCount > 0) {
-      return fallbackCount;
-    }
-    final lastSenderId = data['lastSenderId']?.toString();
-    final lastMessageAtValue = data['lastMessageAt'];
-    final lastMessageAtClientValue = data['lastMessageAtClient'];
-    DateTime? lastMessageAt;
-    if (lastMessageAtValue is Timestamp) {
-      lastMessageAt = lastMessageAtValue.toDate();
-    } else if (lastMessageAtValue is String) {
-      lastMessageAt = DateTime.tryParse(lastMessageAtValue);
-    } else if (lastMessageAtClientValue is Timestamp) {
-      lastMessageAt = lastMessageAtClientValue.toDate();
-    } else if (lastMessageAtClientValue is String) {
-      lastMessageAt = DateTime.tryParse(lastMessageAtClientValue);
-    }
-    final lastReadAtMap =
-        (data['lastReadAt'] as Map?)?.cast<String, dynamic>();
-    DateTime? lastReadAt;
-    final lastReadValue = lastReadAtMap?[userId] ?? data['lastReadAt.$userId'];
-    if (lastReadValue is Timestamp) {
-      lastReadAt = lastReadValue.toDate();
-    } else if (lastReadValue is String) {
-      lastReadAt = DateTime.tryParse(lastReadValue);
-    }
-    if (lastSenderId != null &&
-        lastSenderId != userId &&
-        lastMessageAt != null &&
-        (lastReadAt == null || lastMessageAt.isAfter(lastReadAt))) {
-      return 1;
-    }
-    return directCount > 0 ? directCount : fallbackCount;
   }
 
   @override
@@ -408,12 +359,29 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
                     )
                   : _threadRef == null
                       ? const SizedBox.shrink()
-              : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                  stream: _threadRef!.snapshots(),
-                  builder: (context, threadSnap) {
-                    final threadData = threadSnap.data?.data() ?? {};
-                    final otherUnread =
-                        _resolveUnreadCount(threadData, widget.otherUserId);
+                : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                    stream: _threadRef!.snapshots(),
+                    builder: (context, threadSnap) {
+                      final threadData = threadSnap.data?.data() ?? {};
+                      final lastReadAtMap =
+                          (threadData['lastReadAt'] as Map?)?.cast<String, dynamic>();
+                      final lastReadAtClientMap =
+                          (threadData['lastReadAtClient'] as Map?)
+                              ?.cast<String, dynamic>();
+                      final otherLastReadAt = _parseTimestamp(
+                        lastReadAtMap?[widget.otherUserId] ??
+                            threadData['lastReadAt.${widget.otherUserId}'],
+                      );
+                      final otherLastReadAtClient = _parseTimestamp(
+                        lastReadAtClientMap?[widget.otherUserId] ??
+                            threadData['lastReadAtClient.${widget.otherUserId}'],
+                      );
+                      final effectiveOtherLastReadAt =
+                          (otherLastReadAtClient != null &&
+                                  (otherLastReadAt == null ||
+                                      otherLastReadAtClient.isAfter(otherLastReadAt)))
+                              ? otherLastReadAtClient
+                              : otherLastReadAt;
                     return Column(
                       children: [
                         Expanded(
@@ -479,21 +447,6 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
                                   });
                                 }
                               }
-                              final unreadMessageIds = <String>{};
-                              if (otherUnread > 0) {
-                                var remaining = otherUnread;
-                                for (final d in docs) {
-                                  if (remaining <= 0) {
-                                    break;
-                                  }
-                                  final m = d.data();
-                                  final mSender = m['senderId']?.toString();
-                                  if (mSender == _userDocId) {
-                                    unreadMessageIds.add(d.id);
-                                    remaining -= 1;
-                                  }
-                                }
-                              }
                               return ListView.builder(
                                 reverse: true,
                                 padding:
@@ -508,7 +461,7 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
                                     return _MessageBubble(
                                       text: pending.text,
                                       isMe: true,
-                                      showUnread: false,
+                                      showUnread: true,
                                     );
                                   }
                                   final docIndex = index - pendingList.length;
@@ -516,9 +469,12 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
                                   final senderId = data['senderId']?.toString();
                                   final text = data['text']?.toString() ?? '';
                                   final isMe = senderId == _userDocId;
-                                  final showUnread = isMe &&
-                                      otherUnread > 0 &&
-                                      unreadMessageIds.contains(docs[docIndex].id);
+                                  final messageAt = _parseMessageTime(data);
+                                  final showUnread =
+                                      isMe &&
+                                      messageAt != null &&
+                                      (effectiveOtherLastReadAt == null ||
+                                          messageAt.isAfter(effectiveOtherLastReadAt));
                                   return _MessageBubble(
                                     text: text,
                                     isMe: isMe,

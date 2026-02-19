@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +15,11 @@ class PremiumStatus {
 }
 
 class PremiumService {
+  static const String _androidPackageName = String.fromEnvironment(
+    'ANDROID_PACKAGE_NAME',
+    defaultValue: 'com.lifeisbonus.app.lifeisbonus',
+  );
+
   static Future<String?> resolveUserDocId() async {
     final prefs = await SharedPreferences.getInstance();
     final provider = prefs.getString('lastProvider');
@@ -109,5 +116,20 @@ class PremiumService {
       'premiumUntil': now.toIso8601String(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+  }
+
+  static Future<Uri?> buildManageSubscriptionUri({String? productId}) async {
+    if (Platform.isIOS) {
+      return Uri.parse('https://apps.apple.com/account/subscriptions');
+    }
+    if (Platform.isAndroid) {
+      final product = (productId ?? '').trim();
+      final query = <String, String>{'package': _androidPackageName};
+      if (product.isNotEmpty) {
+        query['sku'] = product;
+      }
+      return Uri.https('play.google.com', '/store/account/subscriptions', query);
+    }
+    return null;
   }
 }

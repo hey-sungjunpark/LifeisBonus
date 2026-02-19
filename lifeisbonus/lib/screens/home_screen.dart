@@ -2752,11 +2752,17 @@ int _resolveThreadUnreadCount(Map<String, dynamic> data, String userId) {
   }
 
   final unreadCounts = (data['unreadCounts'] as Map?)?.cast<String, dynamic>();
+  final hasDirectUnread = unreadCounts?.containsKey(userId) == true;
   final directCount = asInt(unreadCounts?[userId]);
-  if (directCount > 0) return directCount;
 
+  final hasFallbackUnread = data.containsKey('unreadCounts.$userId');
   final fallbackCount = asInt(data['unreadCounts.$userId']);
-  if (fallbackCount > 0) return fallbackCount;
+  if (hasDirectUnread || hasFallbackUnread) {
+    final merged = directCount > fallbackCount ? directCount : fallbackCount;
+    if (merged > 0) {
+      return merged;
+    }
+  }
 
   final lastSenderId = data['lastSenderId']?.toString();
   DateTime? lastMessageAt;
@@ -2773,12 +2779,26 @@ int _resolveThreadUnreadCount(Map<String, dynamic> data, String userId) {
   }
 
   final lastReadAtMap = (data['lastReadAt'] as Map?)?.cast<String, dynamic>();
+  final lastReadAtClientMap =
+      (data['lastReadAtClient'] as Map?)?.cast<String, dynamic>();
   DateTime? lastReadAt;
   final lastReadValue = lastReadAtMap?[userId] ?? data['lastReadAt.$userId'];
+  final lastReadClientValue =
+      lastReadAtClientMap?[userId] ?? data['lastReadAtClient.$userId'];
   if (lastReadValue is Timestamp) {
     lastReadAt = lastReadValue.toDate();
   } else if (lastReadValue is String) {
     lastReadAt = DateTime.tryParse(lastReadValue);
+  }
+  DateTime? lastReadAtClient;
+  if (lastReadClientValue is Timestamp) {
+    lastReadAtClient = lastReadClientValue.toDate();
+  } else if (lastReadClientValue is String) {
+    lastReadAtClient = DateTime.tryParse(lastReadClientValue);
+  }
+  if (lastReadAtClient != null &&
+      (lastReadAt == null || lastReadAtClient.isAfter(lastReadAt))) {
+    lastReadAt = lastReadAtClient;
   }
 
   if (lastSenderId != null &&
@@ -2787,5 +2807,9 @@ int _resolveThreadUnreadCount(Map<String, dynamic> data, String userId) {
       (lastReadAt == null || lastMessageAt.isAfter(lastReadAt))) {
     return 1;
   }
-  return directCount > 0 ? directCount : fallbackCount;
+  if (hasDirectUnread || hasFallbackUnread) {
+    final merged = directCount > fallbackCount ? directCount : fallbackCount;
+    return merged < 0 ? 0 : merged;
+  }
+  return 0;
 }
