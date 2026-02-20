@@ -40,6 +40,14 @@ class _SignUpScreenState extends State<SignUpScreen> {
   static final RegExp _nicknamePattern = RegExp(r'^[a-zA-Z0-9가-힣]+$');
   static const int _minNicknameLength = 2;
   static const int _maxNicknameLength = 12;
+  static const List<String> _weakPasswords = [
+    '12345678',
+    'password',
+    'qwerty',
+    '11111111',
+    '00000000',
+    'abc123',
+  ];
   static const List<String> _forbiddenNicknames = [
     'admin',
     'administrator',
@@ -522,6 +530,15 @@ class _SignUpScreenState extends State<SignUpScreen> {
         _showMessage('이메일 인증을 완료해주세요.');
         return;
       }
+      final passwordMessage = _validatePassword(_passwordController.text);
+      if (passwordMessage != null) {
+        _showMessage(passwordMessage);
+        return;
+      }
+      if (_passwordController.text != _confirmController.text) {
+        _showMessage('비밀번호와 비밀번호 확인이 일치하지 않습니다.');
+        return;
+      }
     } else {
       if (!_phoneVerified) {
         _showMessage('전화번호 인증을 완료해주세요.');
@@ -567,8 +584,10 @@ class _SignUpScreenState extends State<SignUpScreen> {
       }
       if (_methodIndex == 0) {
         await user.updatePassword(_passwordController.text);
+        final email = _emailController.text.trim();
         await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-          'email': _emailController.text.trim(),
+          'email': email,
+          'emailLower': email.toLowerCase(),
           'displayName': nickname,
           'displayNameLower': nickname.toLowerCase(),
           'birthDate': _birthDate!.toIso8601String(),
@@ -642,6 +661,26 @@ class _SignUpScreenState extends State<SignUpScreen> {
       if (lowered.contains(word.toLowerCase())) {
         return '사용할 수 없는 닉네임입니다.';
       }
+    }
+    return null;
+  }
+
+  String? _validatePassword(String password) {
+    if (password.length < 8) {
+      return '비밀번호는 8자 이상이어야 합니다.';
+    }
+    final hasLetter = RegExp(r'[A-Za-z]').hasMatch(password);
+    final hasDigit = RegExp(r'\d').hasMatch(password);
+    final hasSymbol = RegExp(r'[^A-Za-z0-9]').hasMatch(password);
+    final typeCount = [hasLetter, hasDigit, hasSymbol]
+        .where((it) => it)
+        .length;
+    if (typeCount < 2) {
+      return '비밀번호는 영문/숫자/특수문자 중 2가지 이상을 포함해야 합니다.';
+    }
+    final lowered = password.toLowerCase();
+    if (_weakPasswords.any((weak) => lowered.contains(weak))) {
+      return '너무 쉬운 비밀번호는 사용할 수 없습니다.';
     }
     return null;
   }
@@ -1186,6 +1225,14 @@ class _SignUpCard extends StatelessWidget {
               controller: confirmController,
               obscureText: true,
               enabled: emailVerified,
+            ),
+            const SizedBox(height: 6),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '비밀번호 규칙: 8자 이상, 영문/숫자/특수문자 중 2가지 이상',
+                style: TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
+              ),
             ),
             const SizedBox(height: 10),
             _NicknameRow(

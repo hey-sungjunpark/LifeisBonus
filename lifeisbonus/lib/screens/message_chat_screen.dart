@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../services/chat_moderation_service.dart';
 import '../services/premium_service.dart';
 import 'premium_connect_screen.dart';
 
@@ -12,11 +13,13 @@ class MessageChatScreen extends StatefulWidget {
     required this.otherUserId,
     required this.otherNickname,
     this.otherPhotoUrl,
+    this.otherAvatarEmoji,
   });
 
   final String otherUserId;
   final String otherNickname;
   final String? otherPhotoUrl;
+  final String? otherAvatarEmoji;
 
   @override
   State<MessageChatScreen> createState() => _MessageChatScreenState();
@@ -161,8 +164,21 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
   }
 
   Future<void> _sendMessage() async {
-    final text = _controller.text.trim();
-    if (text.isEmpty || _threadRef == null || _userDocId == null || _blocked) {
+    if (_threadRef == null || _userDocId == null || _blocked) {
+      return;
+    }
+    final moderation = ChatModerationService.evaluateOutgoing(_controller.text);
+    if (moderation.status == ChatModerationStatus.blocked) {
+      final message = moderation.userMessage ?? '메시지를 보낼 수 없어요.';
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
+      return;
+    }
+    final text = moderation.text;
+    if (text.isEmpty) {
       return;
     }
     _controller.clear();
@@ -180,6 +196,8 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
       await messageRef.set({
         'senderId': _userDocId,
         'text': text,
+        'moderationStatus': moderation.status.name,
+        if (moderation.reason != null) 'moderationReason': moderation.reason,
         // Use client timestamp for immediate local rendering in chat stream.
         'createdAt': sentAt,
         'createdAtServer': FieldValue.serverTimestamp(),
@@ -199,6 +217,13 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
         'lastReadAtClient.${_userDocId!}': now.toIso8601String(),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      if (moderation.status == ChatModerationStatus.sanitized &&
+          mounted &&
+          moderation.userMessage != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(moderation.userMessage!)),
+        );
+      }
     } catch (_) {
       if (mounted) {
         setState(() {
@@ -238,6 +263,14 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
     return _parseTimestamp(data['clientSentAt']);
   }
 
+  void _openFullImage(BuildContext context, String imageUrl) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _FullScreenProfileImageScreen(imageUrl: imageUrl),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<PremiumStatus>(
@@ -248,7 +281,19 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
           appBar: AppBar(
             title: Row(
               children: [
-                _ProfileAvatar(photoUrl: widget.otherPhotoUrl),
+                GestureDetector(
+                  onTap: () {
+                    final url = widget.otherPhotoUrl?.trim();
+                    if (url == null || url.isEmpty) {
+                      return;
+                    }
+                    _openFullImage(context, url);
+                  },
+                  child: _ProfileAvatar(
+                    photoUrl: widget.otherPhotoUrl,
+                    avatarEmoji: widget.otherAvatarEmoji,
+                  ),
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -468,6 +513,11 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
                                   final data = docs[docIndex].data();
                                   final senderId = data['senderId']?.toString();
                                   final text = data['text']?.toString() ?? '';
+                                  final moderationStatus =
+                                      data['moderationStatus']?.toString() ?? '';
+                                  final displayText = moderationStatus == 'blocked'
+                                      ? ChatModerationService.blockedPlaceholder
+                                      : text;
                                   final isMe = senderId == _userDocId;
                                   final messageAt = _parseMessageTime(data);
                                   final showUnread =
@@ -476,7 +526,7 @@ class _MessageChatScreenState extends State<MessageChatScreen> {
                                       (effectiveOtherLastReadAt == null ||
                                           messageAt.isAfter(effectiveOtherLastReadAt));
                                   return _MessageBubble(
-                                    text: text,
+                                    text: displayText,
                                     isMe: isMe,
                                     showUnread: showUnread,
                                   );
@@ -681,9 +731,10 @@ class _BlockedHint extends StatelessWidget {
 enum _ChatAction { delete, block, report }
 
 class _ProfileAvatar extends StatelessWidget {
-  const _ProfileAvatar({required this.photoUrl});
+  const _ProfileAvatar({required this.photoUrl, this.avatarEmoji});
 
   final String? photoUrl;
+  final String? avatarEmoji;
 
   @override
   Widget build(BuildContext context) {
@@ -694,10 +745,53 @@ class _ProfileAvatar extends StatelessWidget {
         backgroundImage: NetworkImage(photoUrl!),
       );
     }
+    if (avatarEmoji != null && avatarEmoji!.trim().isNotEmpty) {
+      return CircleAvatar(
+        radius: 18,
+        backgroundColor: const Color(0xFFFFE3D3),
+        child: Text(
+          avatarEmoji!.trim(),
+          style: const TextStyle(fontSize: 17),
+        ),
+      );
+    }
     return const CircleAvatar(
       radius: 18,
       backgroundColor: Color(0xFFF1E9FF),
       child: Icon(Icons.person, color: Color(0xFF8E5BFF)),
+    );
+  }
+}
+
+class _FullScreenProfileImageScreen extends StatelessWidget {
+  const _FullScreenProfileImageScreen({required this.imageUrl});
+
+  final String imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        elevation: 0,
+        leading: IconButton(
+          onPressed: () => Navigator.of(context).pop(),
+          icon: const Icon(Icons.close, color: Colors.white),
+        ),
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          minScale: 0.8,
+          maxScale: 4,
+          child: Image.network(
+            imageUrl,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) =>
+                const Icon(Icons.broken_image, color: Colors.white70, size: 56),
+          ),
+        ),
+      ),
     );
   }
 }

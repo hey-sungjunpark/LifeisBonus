@@ -345,6 +345,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
   final ValueNotifier<_MatchCounts> _matchCountsNotifier = ValueNotifier(
     const _MatchCounts(),
   );
+  final ValueNotifier<bool> _matchCountsLoadingNotifier = ValueNotifier(true);
   Future<_MatchCounts>? _matchCountsInFlight;
   _MatchCounts? _lastMatchCounts;
   DateTime? _lastMatchCountsAt;
@@ -362,6 +363,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
   void dispose() {
     _disposed = true;
     _matchCountsNotifier.dispose();
+    _matchCountsLoadingNotifier.dispose();
     super.dispose();
   }
 
@@ -397,20 +399,24 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
         lastAt != null &&
         now.difference(lastAt).inSeconds < 30) {
       _setMatchCountsSafely(cached);
+      _matchCountsLoadingNotifier.value = false;
       return;
     }
     final inFlight = _matchCountsInFlight;
     if (inFlight != null) {
       final result = await inFlight;
       _setMatchCountsSafely(result);
+      _matchCountsLoadingNotifier.value = false;
       return;
     }
+    _matchCountsLoadingNotifier.value = true;
     final future = _loadMatchCountsInternal().whenComplete(() {
       _matchCountsInFlight = null;
     });
     _matchCountsInFlight = future;
     final result = await future;
     _setMatchCountsSafely(result);
+    _matchCountsLoadingNotifier.value = false;
   }
 
   @override
@@ -438,10 +444,18 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
               const SizedBox(height: 16),
               _LifeJourneyCard(metrics: metrics),
               const SizedBox(height: 16),
-              ValueListenableBuilder<_MatchCounts>(
-                valueListenable: _matchCountsNotifier,
-                builder: (context, counts, _) {
-                  return _PeopleCard(counts: counts);
+              ValueListenableBuilder<bool>(
+                valueListenable: _matchCountsLoadingNotifier,
+                builder: (context, isLoading, _) {
+                  return ValueListenableBuilder<_MatchCounts>(
+                    valueListenable: _matchCountsNotifier,
+                    builder: (context, counts, __) {
+                      return _PeopleCard(
+                        counts: counts,
+                        isLoading: isLoading,
+                      );
+                    },
+                  );
                 },
               ),
             ],
@@ -1759,9 +1773,10 @@ class _LifeJourneyCard extends StatelessWidget {
 }
 
 class _PeopleCard extends StatelessWidget {
-  const _PeopleCard({required this.counts});
+  const _PeopleCard({required this.counts, required this.isLoading});
 
   final _MatchCounts counts;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
@@ -1774,19 +1789,28 @@ class _PeopleCard extends StatelessWidget {
       child: Column(
         children: [
           const SizedBox(height: 6),
-          Text(
-            '${counts.total}명',
-            style: const TextStyle(
-              fontSize: 22,
-              color: Color(0xFFB356FF),
-              fontWeight: FontWeight.w700,
+          if (isLoading)
+            const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2.5),
+            )
+          else
+            Text(
+              '${counts.total}명',
+              style: const TextStyle(
+                fontSize: 22,
+                color: Color(0xFFB356FF),
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
           const SizedBox(height: 6),
-          const Text(
-            '나와 비슷한 기록과 계획을 가진 사람들이 있습니다',
+          Text(
+            isLoading
+                ? '매칭 정보를 불러오는 중이에요'
+                : '나와 비슷한 기록과 계획을 가진 사람들이 있습니다',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
+            style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
           ),
           const SizedBox(height: 12),
           Container(
@@ -1797,14 +1821,20 @@ class _PeopleCard extends StatelessWidget {
             ),
             child: Column(
               children: [
-                _PeopleRow(label: '같은 학교 출신', value: '${counts.sameSchool}명'),
+                _PeopleRow(
+                  label: '같은 학교 출신',
+                  value: isLoading ? '...' : '${counts.sameSchool}명',
+                ),
                 const SizedBox(height: 8),
                 _PeopleRow(
                   label: '같은 동네 거주',
-                  value: '${counts.sameNeighborhood}명',
+                  value: isLoading ? '...' : '${counts.sameNeighborhood}명',
                 ),
                 const SizedBox(height: 8),
-                _PeopleRow(label: '비슷한 계획', value: '${counts.similarPlan}명'),
+                _PeopleRow(
+                  label: '비슷한 계획',
+                  value: isLoading ? '...' : '${counts.similarPlan}명',
+                ),
               ],
             ),
           ),

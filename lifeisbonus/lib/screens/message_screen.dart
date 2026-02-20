@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../services/chat_moderation_service.dart';
 import '../services/match_count_service.dart';
 import '../services/premium_service.dart';
 import '../utils/institution_alias_store.dart';
@@ -44,6 +45,16 @@ class _MessageScreenState extends State<MessageScreen> {
   void initState() {
     super.initState();
     _syncAutoOpenRequest();
+    _primeInitialLoads();
+  }
+
+  Future<void> _primeInitialLoads() async {
+    final userDocId = await _userDocIdFuture;
+    if (!mounted || userDocId == null) {
+      return;
+    }
+    await _matchSectionsForUser(userDocId);
+    await _oneLinersForUser(userDocId);
   }
 
   @override
@@ -957,13 +968,16 @@ class _MessageScreenState extends State<MessageScreen> {
           future: _userDocIdFuture,
           builder: (context, idSnapshot) {
             final userDocId = idSnapshot.data;
+            final userDocIdLoading =
+                userDocId == null &&
+                idSnapshot.connectionState != ConnectionState.done;
             return FutureBuilder<_MatchSections>(
               future: _matchSectionsForUser(userDocId),
               builder: (context, matchSnapshot) {
                 final matchSections =
                     matchSnapshot.data ?? _MatchSections.empty();
                 final matchLoading =
-                    !matchSnapshot.hasData &&
+                    userDocIdLoading ||
                     matchSnapshot.connectionState != ConnectionState.done;
                 final hasMatchCards =
                     matchSections.schoolCards.isNotEmpty ||
@@ -1029,6 +1043,8 @@ class _MessageScreenState extends State<MessageScreen> {
                                         otherUserId: thread.otherUserId,
                                         otherNickname: thread.otherNickname,
                                         otherPhotoUrl: thread.otherPhotoUrl,
+                                        otherAvatarEmoji:
+                                            thread.otherAvatarEmoji,
                                       ),
                                     ),
                                   );
@@ -1115,6 +1131,12 @@ class _MessageScreenState extends State<MessageScreen> {
                                   icon: Icons.hourglass_bottom_rounded,
                                   title: '매칭 정보를 불러오는 중이에요',
                                   subtitle: '잠시만 기다려주세요',
+                                )
+                              else if (userDocId == null)
+                                const _EmptyHint(
+                                  icon: Icons.lock_outline_rounded,
+                                  title: '로그인이 필요해요',
+                                  subtitle: '로그인 후 매칭 정보를 확인할 수 있어요',
                                 )
                               else if (!hasMatchCards)
                                 const _EmptyHint(
@@ -1297,6 +1319,7 @@ class _MessageScreenState extends State<MessageScreen> {
             ? (data?['displayName'] as String).trim()
             : '알 수 없음',
         photoUrl: data?['photoUrl'] as String?,
+        avatarEmoji: data?['avatarEmoji'] as String?,
         statusMessage: data?['statusMessage'] as String?,
       );
     });
@@ -1349,12 +1372,14 @@ class _UserProfile {
     required this.id,
     required this.nickname,
     this.photoUrl,
+    this.avatarEmoji,
     this.statusMessage,
   });
 
   final String id;
   final String nickname;
   final String? photoUrl;
+  final String? avatarEmoji;
   final String? statusMessage;
 }
 
@@ -1621,6 +1646,7 @@ List<Widget> _buildThreadTiles(
         final item = thread.copyWith(
           otherNickname: profile?.nickname ?? '알 수 없음',
           otherPhotoUrl: profile?.photoUrl,
+          otherAvatarEmoji: profile?.avatarEmoji,
         );
         return Padding(
           padding: const EdgeInsets.only(bottom: 12),
@@ -1728,12 +1754,14 @@ class _ThreadItem {
     this.isPinned = false,
     this.otherNickname = '알 수 없음',
     this.otherPhotoUrl,
+    this.otherAvatarEmoji,
   });
 
   final String threadId;
   final String otherUserId;
   final String otherNickname;
   final String? otherPhotoUrl;
+  final String? otherAvatarEmoji;
   final String lastMessage;
   final DateTime? lastMessageAt;
   final int unreadCount;
@@ -1742,6 +1770,7 @@ class _ThreadItem {
   _ThreadItem copyWith({
     String? otherNickname,
     String? otherPhotoUrl,
+    String? otherAvatarEmoji,
     bool? isPinned,
   }) {
     return _ThreadItem(
@@ -1749,6 +1778,7 @@ class _ThreadItem {
       otherUserId: otherUserId,
       otherNickname: otherNickname ?? this.otherNickname,
       otherPhotoUrl: otherPhotoUrl ?? this.otherPhotoUrl,
+      otherAvatarEmoji: otherAvatarEmoji ?? this.otherAvatarEmoji,
       lastMessage: lastMessage,
       lastMessageAt: lastMessageAt,
       unreadCount: unreadCount,
@@ -1797,13 +1827,20 @@ class _ThreadTile extends StatelessWidget {
           children: [
             CircleAvatar(
               radius: 20,
-              backgroundColor: const Color(0xFFF1E9FF),
+              backgroundColor: item.otherAvatarEmoji?.trim().isNotEmpty == true
+                  ? const Color(0xFFFFE3D3)
+                  : const Color(0xFFF1E9FF),
               backgroundImage:
                   item.otherPhotoUrl == null || item.otherPhotoUrl!.isEmpty
                   ? null
                   : NetworkImage(item.otherPhotoUrl!),
               child: item.otherPhotoUrl == null || item.otherPhotoUrl!.isEmpty
-                  ? const Icon(Icons.person, color: Color(0xFF8E5BFF))
+                  ? (item.otherAvatarEmoji?.trim().isNotEmpty == true
+                      ? Text(
+                          item.otherAvatarEmoji!.trim(),
+                          style: const TextStyle(fontSize: 18),
+                        )
+                      : const Icon(Icons.person, color: Color(0xFF8E5BFF)))
                   : null,
             ),
             const SizedBox(width: 10),
@@ -1891,6 +1928,10 @@ class _ThreadLastMessage extends StatelessWidget {
       return null;
     }
     final data = snap.docs.first.data();
+    final moderationStatus = data['moderationStatus']?.toString();
+    if (moderationStatus == 'blocked') {
+      return ChatModerationService.blockedPlaceholder;
+    }
     final text = data['text']?.toString();
     if (text != null && text.trim().isNotEmpty) {
       return text.trim();

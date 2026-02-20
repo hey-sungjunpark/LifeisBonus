@@ -131,6 +131,89 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _handleForgotPassword() async {
+    final emailController = TextEditingController(
+      text: _emailController.text.trim(),
+    );
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text(
+          '비밀번호 재설정',
+          style: TextStyle(fontSize: 18),
+        ),
+        content: TextField(
+          controller: emailController,
+          keyboardType: TextInputType.emailAddress,
+          decoration: const InputDecoration(
+            hintText: '가입한 이메일을 입력하세요',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('발송'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    final email = emailController.text.trim();
+    if (email.isEmpty) {
+      _showError('이메일을 입력해주세요.');
+      return;
+    }
+    try {
+      final normalizedEmail = email.toLowerCase();
+      var userByEmailSnap = await FirebaseFirestore.instance
+          .collection('users')
+          .where('emailLower', isEqualTo: normalizedEmail)
+          .limit(1)
+          .get();
+      if (userByEmailSnap.docs.isEmpty) {
+        userByEmailSnap = await FirebaseFirestore.instance
+            .collection('users')
+            .where('email', isEqualTo: normalizedEmail)
+            .limit(1)
+            .get();
+      }
+      if (userByEmailSnap.docs.isEmpty && email != normalizedEmail) {
+        userByEmailSnap = await FirebaseFirestore.instance
+            .collection('users')
+            .where('email', isEqualTo: email)
+            .limit(1)
+            .get();
+      }
+      if (userByEmailSnap.docs.isEmpty) {
+        _showError('가입된 이메일이 아닙니다.');
+        return;
+      }
+      await FirebaseAuth.instance.setLanguageCode('ko');
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: normalizedEmail);
+      if (!mounted) {
+        return;
+      }
+      _showError('비밀번호 재설정 메일을 발송했습니다.');
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showError(_messageForAuthError(error));
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      _showError('비밀번호 재설정 메일 발송에 실패했습니다.');
+    }
+  }
+
   String? _normalizePhoneNumber(String input) {
     final digits = input.replaceAll(RegExp(r'\D'), '');
     if (digits.isEmpty) {
@@ -841,6 +924,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   passwordController: _passwordController,
                                   isLoading: _isLoading,
                                   onLoginPressed: _handleEmailLogin,
+                                  onForgotPassword: _handleForgotPassword,
                                 )
                               : _PhoneLoginCard(
                                   countryCode: _countryCode,
@@ -1033,12 +1117,14 @@ class _TabChip extends StatelessWidget {
 class _LoginCard extends StatelessWidget {
   const _LoginCard({
     required this.onLoginPressed,
+    required this.onForgotPassword,
     required this.emailController,
     required this.passwordController,
     required this.isLoading,
   });
 
   final VoidCallback onLoginPressed;
+  final VoidCallback onForgotPassword;
   final TextEditingController emailController;
   final TextEditingController passwordController;
   final bool isLoading;
@@ -1082,7 +1168,7 @@ class _LoginCard extends StatelessWidget {
             onPressed: isLoading ? null : onLoginPressed,
             isLoading: isLoading,
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 8),
           GestureDetector(
             onTap: () {
               Navigator.of(context).push(
@@ -1102,6 +1188,28 @@ class _LoginCard extends StatelessWidget {
                     ),
                   ),
                 ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Center(
+            child: TextButton(
+              onPressed: onForgotPassword,
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: const VisualDensity(
+                  horizontal: -4,
+                  vertical: -4,
+                ),
+              ),
+              child: const Text(
+                '비밀번호를 잊으셨나요?',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF8A8A8A),
+                ),
               ),
             ),
           ),

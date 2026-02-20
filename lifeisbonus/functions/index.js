@@ -8,6 +8,62 @@ const { google } = require("googleapis");
 
 initializeApp();
 
+const CHAT_BLOCKED_PLACEHOLDER = "운영 정책에 의해 숨겨진 메시지입니다.";
+const CHAT_MAX_LENGTH = 300;
+const CHAT_BLOCKED_KEYWORDS = [
+  "개새끼",
+  "병신",
+  "섹스",
+  "자살",
+  "죽여",
+  "성폭행",
+  "강간",
+  "마약",
+];
+const CHAT_REPEAT_SPAM_RE = /(.)\1{8,}/;
+
+function moderateChatText(rawText) {
+  const normalized = String(rawText || "")
+    .trim()
+    .replace(/\s+/g, " ");
+
+  if (!normalized) {
+    return {
+      status: "blocked",
+      text: CHAT_BLOCKED_PLACEHOLDER,
+      reason: "empty",
+    };
+  }
+  if (normalized.length > CHAT_MAX_LENGTH) {
+    return {
+      status: "blocked",
+      text: CHAT_BLOCKED_PLACEHOLDER,
+      reason: "too_long",
+    };
+  }
+  if (CHAT_REPEAT_SPAM_RE.test(normalized)) {
+    return {
+      status: "blocked",
+      text: CHAT_BLOCKED_PLACEHOLDER,
+      reason: "spam_repeat",
+    };
+  }
+  const lower = normalized.toLowerCase();
+  if (CHAT_BLOCKED_KEYWORDS.some((k) => lower.includes(k.toLowerCase()))) {
+    return {
+      status: "blocked",
+      text: CHAT_BLOCKED_PLACEHOLDER,
+      reason: "policy_keyword",
+    };
+  }
+
+  return {
+    status: "ok",
+    text: normalized,
+    reason: "",
+  };
+}
+
 const PREMIUM_PRODUCT_IDS = String(
   process.env.PREMIUM_PRODUCT_IDS || "lifeisbonus_premium_monthly_9900",
 )
@@ -298,18 +354,22 @@ exports.sendMessagePush = onDocumentCreated(
       return;
     }
     const message = snapshot.data() || {};
+    const messageRef = snapshot.ref;
     const threadId = event.params.threadId;
     const senderId = String(message.senderId || "").trim();
-    const text = String(message.text || "").trim();
+    const originalText = String(message.text || "").trim();
     if (!threadId || !senderId) {
       return;
     }
 
+    const moderation = moderateChatText(originalText);
     const db = getFirestore();
-    const threadSnap = await db.collection("threads").doc(threadId).get();
+    const threadRef = db.collection("threads").doc(threadId);
+    const threadSnap = await threadRef.get();
     if (!threadSnap.exists) {
       return;
     }
+
     const participants = Array.isArray(threadSnap.get("participants"))
       ? threadSnap.get("participants").map((v) => String(v))
       : [];
@@ -317,6 +377,40 @@ exports.sendMessagePush = onDocumentCreated(
     if (receiverIds.length === 0) {
       return;
     }
+
+    let pushText = moderation.text;
+    const messagePatch = {};
+    if (moderation.status !== "ok") {
+      messagePatch.text = moderation.text;
+      messagePatch.moderated = true;
+      messagePatch.moderationStatus = moderation.status;
+      messagePatch.moderationReason = moderation.reason;
+      messagePatch.moderatedAt = FieldValue.serverTimestamp();
+      await messageRef.set(messagePatch, { merge: true });
+      const unreadCounts = threadSnap.get("unreadCounts") || {};
+      const threadPatch = {
+        moderationUpdatedAt: FieldValue.serverTimestamp(),
+      };
+      if (threadSnap.get("lastSenderId") === senderId) {
+        threadPatch.lastMessage = moderation.text;
+      }
+      if (moderation.status === "blocked") {
+        receiverIds.forEach((receiverId) => {
+          const current = Number(unreadCounts[receiverId] || 0);
+          threadPatch[`unreadCounts.${receiverId}`] = Math.max(current - 1, 0);
+        });
+        await threadRef.set(threadPatch, { merge: true });
+        return;
+      }
+      await threadRef.set(threadPatch, { merge: true });
+    } else if (message.moderationStatus !== "ok") {
+      await messageRef.set(
+        { moderationStatus: "ok", moderated: false },
+        { merge: true },
+      );
+    }
+
+    const text = String(pushText || "").trim();
 
     let senderName = "새 쪽지";
     const senderSnap = await db.collection("users").doc(senderId).get();

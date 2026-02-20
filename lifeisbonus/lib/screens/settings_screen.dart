@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:kakao_flutter_sdk_user/kakao_flutter_sdk_user.dart';
 import 'package:flutter_naver_login/flutter_naver_login.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -26,15 +28,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _alertsEnabled = true;
   bool _loadingProfile = true;
   String? _nickname;
+  String? _photoUrl;
+  String? _avatarEmoji;
   int? _age;
   String? _userDocId;
   PremiumStatus? _premiumStatus;
   bool _loadingPremium = false;
   bool _deletingAccount = false;
+  bool _isPasswordAccount = false;
 
   static final RegExp _nicknamePattern = RegExp(r'^[a-zA-Z0-9가-힣]+$');
   static const int _minNicknameLength = 2;
   static const int _maxNicknameLength = 12;
+  static const List<String> _defaultAvatarEmojis = [
+    '🙂',
+    '😄',
+    '😊',
+    '😎',
+    '🥳',
+    '🌟',
+    '🍀',
+    '🐻',
+    '🦊',
+    '🐼',
+    '🐨',
+    '🐯',
+    '🐶',
+    '🐱',
+    '🦁',
+    '🐰',
+    '🐸',
+    '🐵',
+    '🦄',
+    '🐙',
+    '🍎',
+    '🍉',
+    '🍓',
+    '🍒',
+    '🌈',
+    '☀️',
+    '🌙',
+    '⭐',
+    '🎈',
+    '🎵',
+    '🎮',
+    '⚽',
+  ];
   static const List<String> _forbiddenNicknames = [
     'admin',
     'administrator',
@@ -86,6 +125,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       });
       return;
     }
+    final authUser = FirebaseAuth.instance.currentUser;
+    final providerIds = authUser?.providerData
+            .map((provider) => provider.providerId)
+            .toSet() ??
+        <String>{};
+    _isPasswordAccount = providerIds.contains('password');
     _userDocId = docId;
     try {
       final doc =
@@ -99,6 +144,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
       setState(() {
         _nickname = displayName is String ? displayName.trim() : null;
+        _photoUrl = (data?['photoUrl'] as String?)?.trim();
+        _avatarEmoji = (data?['avatarEmoji'] as String?)?.trim();
         _age = birthDate == null ? null : _calculateAge(birthDate, DateTime.now());
         if (data?['notificationsEnabled'] is bool) {
           _alertsEnabled = data?['notificationsEnabled'] as bool;
@@ -359,6 +406,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Future<void> _sendPasswordResetEmail() async {
+    final email = FirebaseAuth.instance.currentUser?.email?.trim();
+    if (email == null || email.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('가입 이메일 정보를 찾을 수 없어요.')));
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('비밀번호 변경'),
+        content: Text('$email 로 비밀번호 재설정 메일을 보낼까요?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('발송'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    try {
+      await FirebaseAuth.instance.setLanguageCode('ko');
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$email 로 비밀번호 재설정 메일을 보냈어요.')),
+      );
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('재설정 메일 전송 실패: ${e.code}')));
+    }
+  }
+
   Future<String?> _resolveUserDocId() async {
     final prefs = await SharedPreferences.getInstance();
     final provider = prefs.getString('lastProvider');
@@ -428,11 +522,78 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return true;
   }
 
+  Future<String> _uploadProfileImage({
+    required String userDocId,
+    required XFile picked,
+  }) async {
+    final bytes = await picked.readAsBytes();
+    final ref = FirebaseStorage.instance.ref().child(
+      'users/$userDocId/profile/profile.jpg',
+    );
+    await ref.putData(
+      bytes,
+      SettableMetadata(contentType: 'image/jpeg'),
+    );
+    return ref.getDownloadURL();
+  }
+
+  Future<void> _deleteStorageImageByUrl(String? url) async {
+    final target = url?.trim();
+    if (target == null || target.isEmpty) {
+      return;
+    }
+    try {
+      await FirebaseStorage.instance.refFromURL(target).delete();
+    } catch (_) {}
+  }
+
+  Widget _buildProfileAvatar({
+    required String displayName,
+    String? photoUrl,
+    String? avatarEmoji,
+  }) {
+    final initial = displayName.isNotEmpty ? displayName.substring(0, 1) : '?';
+    if (photoUrl != null && photoUrl.trim().isNotEmpty) {
+      return CircleAvatar(
+        radius: 22,
+        backgroundColor: const Color(0xFFF1E9FF),
+        backgroundImage: NetworkImage(photoUrl.trim()),
+      );
+    }
+    if (avatarEmoji != null && avatarEmoji.trim().isNotEmpty) {
+      return CircleAvatar(
+        radius: 22,
+        backgroundColor: const Color(0xFFFFE3D3),
+        child: Text(
+          avatarEmoji.trim(),
+          style: const TextStyle(fontSize: 20),
+        ),
+      );
+    }
+    return CircleAvatar(
+      radius: 22,
+      backgroundColor: const Color(0xFFFFE3D3),
+      child: Text(
+        initial,
+        style: const TextStyle(
+          fontWeight: FontWeight.w700,
+          color: Color(0xFFB356FF),
+        ),
+      ),
+    );
+  }
+
   Future<void> _openNicknameEditor() async {
     final controller = TextEditingController(text: _nickname ?? '');
     bool isChecking = false;
+    bool isUploadingImage = false;
     bool isChecked = false;
     String? lastChecked;
+    String? inlineNotice;
+    bool inlineNoticeIsError = false;
+    String? draftPhotoUrl = _photoUrl;
+    String? draftAvatarEmoji = _avatarEmoji;
+    bool removePhotoOnSave = false;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -444,19 +605,65 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setSheetState) {
+            Future<void> pickFromGallery() async {
+              final docId = _userDocId;
+              if (docId == null) {
+                return;
+              }
+              final picker = ImagePicker();
+              final picked = await picker.pickImage(
+                source: ImageSource.gallery,
+                maxWidth: 1080,
+                maxHeight: 1080,
+                imageQuality: 85,
+              );
+              if (picked == null) {
+                return;
+              }
+              setSheetState(() {
+                isUploadingImage = true;
+              });
+              try {
+                final uploadedUrl = await _uploadProfileImage(
+                  userDocId: docId,
+                  picked: picked,
+                );
+                setSheetState(() {
+                  draftPhotoUrl = uploadedUrl;
+                  draftAvatarEmoji = null;
+                  removePhotoOnSave = false;
+                });
+              } catch (e) {
+                if (context.mounted) {
+                  setSheetState(() {
+                    inlineNotice = '이미지 업로드에 실패했어요. ($e)';
+                    inlineNoticeIsError = true;
+                  });
+                }
+              } finally {
+                if (context.mounted) {
+                  setSheetState(() {
+                    isUploadingImage = false;
+                  });
+                }
+              }
+            }
+
             Future<void> checkNickname() async {
               final nickname = controller.text.trim();
               if (nickname.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('닉네임을 입력해주세요.')),
-                );
+                setSheetState(() {
+                  inlineNotice = '닉네임을 입력해주세요.';
+                  inlineNoticeIsError = true;
+                });
                 return;
               }
               final validationMessage = _validateNickname(nickname);
               if (validationMessage != null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(validationMessage)),
-                );
+                setSheetState(() {
+                  inlineNotice = validationMessage;
+                  inlineNoticeIsError = true;
+                });
                 return;
               }
               setSheetState(() {
@@ -467,32 +674,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 isChecking = false;
                 isChecked = available;
                 lastChecked = available ? nickname : null;
+                inlineNotice = available
+                    ? '사용 가능한 닉네임입니다.'
+                    : '이미 사용 중인 닉네임입니다.';
+                inlineNoticeIsError = !available;
               });
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    available ? '사용 가능한 닉네임입니다.' : '이미 사용 중인 닉네임입니다.',
-                  ),
-                ),
-              );
             }
 
             Future<void> saveNickname() async {
               final nickname = controller.text.trim();
               if (nickname.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('닉네임을 입력해주세요.')),
-                );
+                setSheetState(() {
+                  inlineNotice = '닉네임을 입력해주세요.';
+                  inlineNoticeIsError = true;
+                });
                 return;
               }
               final validationMessage = _validateNickname(nickname);
               if (validationMessage != null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(validationMessage)),
-                );
+                setSheetState(() {
+                  inlineNotice = validationMessage;
+                  inlineNoticeIsError = true;
+                });
                 return;
               }
-              if (!isChecked || lastChecked != nickname) {
+              final currentNickname = (_nickname ?? '').trim();
+              final nicknameChanged = nickname != currentNickname;
+              final currentPhotoUrl = (_photoUrl ?? '').trim();
+              final currentAvatarEmoji = (_avatarEmoji ?? '').trim();
+              final nextPhotoUrl = (draftPhotoUrl ?? '').trim();
+              final nextAvatarEmoji = (draftAvatarEmoji ?? '').trim();
+              final profileOnlyChanged =
+                  !nicknameChanged &&
+                  (currentPhotoUrl != nextPhotoUrl ||
+                      currentAvatarEmoji != nextAvatarEmoji);
+
+              if (!nicknameChanged && !profileOnlyChanged) {
+                Navigator.of(context).pop();
+                return;
+              }
+
+              if (nicknameChanged && (!isChecked || lastChecked != nickname)) {
                 await checkNickname();
                 if (!isChecked || lastChecked != nickname) {
                   return;
@@ -502,12 +724,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (docId == null) {
                 return;
               }
+              final prevPhotoUrl = _photoUrl?.trim();
+              final nextPhotoUrlRaw = draftPhotoUrl?.trim();
+              final shouldDeletePrevPhoto =
+                  removePhotoOnSave &&
+                  prevPhotoUrl != null &&
+                  prevPhotoUrl.isNotEmpty &&
+                  (nextPhotoUrlRaw == null || nextPhotoUrlRaw.isEmpty);
+              if (shouldDeletePrevPhoto) {
+                await _deleteStorageImageByUrl(prevPhotoUrl);
+              }
               await FirebaseFirestore.instance
                   .collection('users')
                   .doc(docId)
                   .set({
                 'displayName': nickname,
                 'displayNameLower': nickname.toLowerCase(),
+                'photoUrl':
+                    nextPhotoUrlRaw?.isNotEmpty == true ? nextPhotoUrlRaw : null,
+                'avatarEmoji':
+                    draftAvatarEmoji?.trim().isNotEmpty == true
+                        ? draftAvatarEmoji!.trim()
+                        : null,
                 'updatedAt': FieldValue.serverTimestamp(),
               }, SetOptions(merge: true));
               if (!mounted) {
@@ -515,7 +753,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }
               setState(() {
                 _nickname = nickname;
+                _photoUrl =
+                    nextPhotoUrlRaw?.isNotEmpty == true ? nextPhotoUrlRaw : null;
+                _avatarEmoji = draftAvatarEmoji?.trim().isNotEmpty == true
+                    ? draftAvatarEmoji!.trim()
+                    : null;
               });
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('프로필이 변경되었습니다.')),
+              );
               Navigator.of(context).pop();
             }
 
@@ -540,13 +786,121 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   const SizedBox(height: 16),
                   const Text(
-                    '닉네임 수정',
+                    '프로필 편집',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                   const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      _buildProfileAvatar(
+                        displayName: controller.text.trim().isEmpty
+                            ? (_nickname ?? '나')
+                            : controller.text.trim(),
+                        photoUrl: draftPhotoUrl,
+                        avatarEmoji: draftAvatarEmoji,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            OutlinedButton.icon(
+                              onPressed: isUploadingImage
+                                  ? null
+                                  : () => pickFromGallery(),
+                              icon: const Icon(Icons.photo_library_outlined, size: 16),
+                              label: const Text('사진 선택'),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 8,
+                                ),
+                                textStyle: const TextStyle(fontSize: 12),
+                                foregroundColor: const Color(0xFF8E5BFF),
+                                side: const BorderSide(color: Color(0xFF8E5BFF)),
+                              ),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: () {
+                                setSheetState(() {
+                                  draftPhotoUrl = null;
+                                  removePhotoOnSave = true;
+                                });
+                              },
+                              icon: const Icon(Icons.delete_outline, size: 16),
+                              label: const Text('사진 제거'),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 8,
+                                ),
+                                textStyle: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                            if (isUploadingImage)
+                              const Padding(
+                                padding: EdgeInsets.only(left: 6),
+                                child: SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '기본 이모지 아바타 선택',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade700,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: 44,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: _defaultAvatarEmojis.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (context, index) {
+                        final emoji = _defaultAvatarEmojis[index];
+                        final selected = draftAvatarEmoji == emoji;
+                        return InkWell(
+                          onTap: () {
+                            setSheetState(() {
+                              draftAvatarEmoji = emoji;
+                              draftPhotoUrl = null;
+                              removePhotoOnSave = true;
+                            });
+                          },
+                          borderRadius: BorderRadius.circular(999),
+                          child: CircleAvatar(
+                            radius: 18,
+                            backgroundColor: selected
+                                ? const Color(0xFFDCC7FF)
+                                : const Color(0xFFF4EEFF),
+                            child: Text(
+                              emoji,
+                              style: const TextStyle(fontSize: 18),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 14),
                   Row(
                     children: [
                       Expanded(
@@ -603,12 +957,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ],
                   ),
+                  if (inlineNotice != null) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: inlineNoticeIsError
+                            ? const Color(0xFFFFF1F1)
+                            : const Color(0xFFEEFFF5),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: inlineNoticeIsError
+                              ? const Color(0xFFFFD4D4)
+                              : const Color(0xFFC8F1DA),
+                        ),
+                      ),
+                      child: Text(
+                        inlineNotice!,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: inlineNoticeIsError
+                              ? const Color(0xFFC63D3D)
+                              : const Color(0xFF1D8A52),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   SizedBox(
                     width: double.infinity,
                     height: 46,
                     child: ElevatedButton(
-                      onPressed: saveNickname,
+                      onPressed: isUploadingImage ? null : saveNickname,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFFFF7A3D),
                         shape: RoundedRectangleBorder(
@@ -800,9 +1185,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final displayName = _nickname?.trim().isNotEmpty == true
         ? _nickname!.trim()
         : '닉네임 없음';
-    final initial =
-        displayName.isNotEmpty ? displayName.substring(0, 1) : '?';
     final bonusYearLabel = _age == null ? '보너스 게임 정보 없음' : '보너스 게임 ${_age}년차';
+    final memberLabel =
+        _premiumStatus?.isPremium == true ? '프리미엄 가입자' : '무료 멤버';
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
       child: Column(
@@ -827,16 +1212,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _SettingsCard(
             child: Row(
               children: [
-                CircleAvatar(
-                  radius: 22,
-                  backgroundColor:
-                      isDark ? colorScheme.surfaceVariant : const Color(0xFFFFE3D3),
-                  child: Text(
-                    initial,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFFB356FF),
-                    ),
+                SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: _buildProfileAvatar(
+                    displayName: displayName,
+                    photoUrl: _photoUrl,
+                    avatarEmoji: _avatarEmoji,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -864,7 +1246,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        '무료 멤버',
+                        memberLabel,
                         style: TextStyle(
                           fontSize: 11,
                           color: isDark
@@ -906,10 +1288,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _SettingsCard(
             child: Column(
               children: [
-                const _SettingRow(
+                _SettingRow(
                   icon: Icons.person_outline,
-                  label: '프로필 설정',
+                  label: '프로필 편집',
+                  onTap: _loadingProfile ? null : _openNicknameEditor,
                 ),
+                if (_isPasswordAccount) ...[
+                  Divider(
+                    height: 1,
+                    color: isDark ? colorScheme.outlineVariant : null,
+                  ),
+                  _SettingRow(
+                    icon: Icons.lock_reset_rounded,
+                    label: '비밀번호 변경',
+                    onTap: _sendPasswordResetEmail,
+                  ),
+                ],
                 Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
                 _SettingRow(
                   icon: Icons.workspace_premium_rounded,
@@ -938,12 +1332,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           content: const Text('알림을 켜시겠어요?'),
                           actions: [
                             TextButton(
-                              onPressed: () => Navigator.of(context).pop(false),
-                              child: const Text('취소'),
-                            ),
-                            TextButton(
                               onPressed: () => Navigator.of(context).pop(true),
                               child: const Text('확인'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(false),
+                              child: const Text('취소'),
                             ),
                           ],
                         ),
@@ -1327,29 +1721,42 @@ class _HelpFaqScreen extends StatelessWidget {
                 borderRadius: BorderRadius.circular(14),
                 side: const BorderSide(color: Color(0xFFE9E9EF)),
               ),
-              child: ExpansionTile(
-                title: Text(
-                  item.q,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+              child: Theme(
+                data: Theme.of(
+                  context,
+                ).copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: BorderSide.none,
                   ),
-                ),
-                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                tilePadding: const EdgeInsets.symmetric(horizontal: 16),
-                children: [
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      item.a,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        height: 1.5,
-                        color: Color(0xFF66666F),
-                      ),
+                  collapsedShape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: BorderSide.none,
+                  ),
+                  title: Text(
+                    item.q,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
-                ],
+                  childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                  tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        item.a,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          height: 1.5,
+                          color: Color(0xFF66666F),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

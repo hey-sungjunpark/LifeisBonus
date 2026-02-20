@@ -75,6 +75,7 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
             .get();
         final nickname = userDoc.data()?['displayName'] as String?;
         final photoUrl = userDoc.data()?['photoUrl'] as String?;
+        final avatarEmoji = userDoc.data()?['avatarEmoji'] as String?;
         final statusMessage = userDoc.data()?['statusMessage'] as String?;
         final lastActiveValue = userDoc.data()?['lastActiveAt'];
         DateTime? lastActiveAt;
@@ -92,6 +93,7 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
             matchTitle: widget.title,
             matchSubtitle: widget.subtitle,
             photoUrl: photoUrl,
+            avatarEmoji: avatarEmoji,
             statusMessage: statusMessage,
             lastActiveAt: lastActiveAt,
             oneLiner: await loadOneLinerForUser(id),
@@ -131,6 +133,7 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
             .get();
         final nickname = userDoc.data()?['displayName'] as String?;
         final photoUrl = userDoc.data()?['photoUrl'] as String?;
+        final avatarEmoji = userDoc.data()?['avatarEmoji'] as String?;
         final statusMessage = userDoc.data()?['statusMessage'] as String?;
         final lastActiveValue = userDoc.data()?['lastActiveAt'];
         DateTime? lastActiveAt;
@@ -148,6 +151,7 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
           matchTitle: widget.title,
           matchSubtitle: widget.subtitle,
           photoUrl: photoUrl,
+          avatarEmoji: avatarEmoji,
           statusMessage: statusMessage,
           lastActiveAt: lastActiveAt,
           oneLiner: await loadOneLinerForUser(resolvedId),
@@ -225,6 +229,7 @@ class _MessageMatchDetailScreenState extends State<MessageMatchDetailScreen> {
                           otherUserId: user.id,
                           otherNickname: user.nickname,
                           otherPhotoUrl: user.photoUrl,
+                          otherAvatarEmoji: user.avatarEmoji,
                         ),
                       ),
                     );
@@ -291,6 +296,7 @@ class _MatchedUser {
     required this.matchTitle,
     required this.matchSubtitle,
     this.photoUrl,
+    this.avatarEmoji,
     this.statusMessage,
     this.lastActiveAt,
     this.oneLiner,
@@ -301,6 +307,7 @@ class _MatchedUser {
   final String matchTitle;
   final String matchSubtitle;
   final String? photoUrl;
+  final String? avatarEmoji;
   final String? statusMessage;
   final DateTime? lastActiveAt;
   final String? oneLiner;
@@ -347,7 +354,10 @@ class _MatchedUserCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                _ProfileAvatar(photoUrl: user.photoUrl),
+                _ProfileAvatar(
+                  photoUrl: user.photoUrl,
+                  avatarEmoji: user.avatarEmoji,
+                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -432,9 +442,10 @@ class _MatchedUserCard extends StatelessWidget {
 }
 
 class _ProfileAvatar extends StatelessWidget {
-  const _ProfileAvatar({required this.photoUrl});
+  const _ProfileAvatar({required this.photoUrl, this.avatarEmoji});
 
   final String? photoUrl;
+  final String? avatarEmoji;
 
   @override
   Widget build(BuildContext context) {
@@ -445,10 +456,53 @@ class _ProfileAvatar extends StatelessWidget {
         backgroundImage: NetworkImage(photoUrl!),
       );
     }
+    if (avatarEmoji != null && avatarEmoji!.trim().isNotEmpty) {
+      return CircleAvatar(
+        radius: 18,
+        backgroundColor: const Color(0xFFFFE3D3),
+        child: Text(
+          avatarEmoji!.trim(),
+          style: const TextStyle(fontSize: 17),
+        ),
+      );
+    }
     return const CircleAvatar(
       radius: 18,
       backgroundColor: Color(0xFFF1E9FF),
       child: Icon(Icons.person, color: Color(0xFF8E5BFF)),
+    );
+  }
+}
+
+class _LargeProfileAvatar extends StatelessWidget {
+  const _LargeProfileAvatar({required this.photoUrl, this.avatarEmoji});
+
+  final String? photoUrl;
+  final String? avatarEmoji;
+
+  @override
+  Widget build(BuildContext context) {
+    if (photoUrl != null && photoUrl!.isNotEmpty) {
+      return CircleAvatar(
+        radius: 42,
+        backgroundColor: const Color(0xFFF1E9FF),
+        backgroundImage: NetworkImage(photoUrl!),
+      );
+    }
+    if (avatarEmoji != null && avatarEmoji!.trim().isNotEmpty) {
+      return CircleAvatar(
+        radius: 42,
+        backgroundColor: const Color(0xFFFFE3D3),
+        child: Text(
+          avatarEmoji!.trim(),
+          style: const TextStyle(fontSize: 34),
+        ),
+      );
+    }
+    return const CircleAvatar(
+      radius: 42,
+      backgroundColor: Color(0xFFF1E9FF),
+      child: Icon(Icons.person, size: 34, color: Color(0xFF8E5BFF)),
     );
   }
 }
@@ -556,6 +610,14 @@ class MatchProfileDetailScreen extends StatelessWidget {
 
   final _MatchedUser user;
 
+  void _openFullImage(BuildContext context, String imageUrl) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _FullScreenProfileImageScreen(imageUrl: imageUrl),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final status = user.statusMessage?.trim();
@@ -570,7 +632,19 @@ class MatchProfileDetailScreen extends StatelessWidget {
             Center(
               child: Column(
                 children: [
-                  _ProfileAvatar(photoUrl: user.photoUrl),
+                  GestureDetector(
+                    onTap: () {
+                      final url = user.photoUrl?.trim();
+                      if (url == null || url.isEmpty) {
+                        return;
+                      }
+                      _openFullImage(context, url);
+                    },
+                    child: _LargeProfileAvatar(
+                      photoUrl: user.photoUrl,
+                      avatarEmoji: user.avatarEmoji,
+                    ),
+                  ),
                   const SizedBox(height: 10),
                   Text(
                     user.nickname,
@@ -646,6 +720,7 @@ class MatchProfileDetailScreen extends StatelessWidget {
                         otherUserId: user.id,
                         otherNickname: user.nickname,
                         otherPhotoUrl: user.photoUrl,
+                        otherAvatarEmoji: user.avatarEmoji,
                       ),
                     ),
                   );
@@ -662,6 +737,39 @@ class MatchProfileDetailScreen extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FullScreenProfileImageScreen extends StatelessWidget {
+  const _FullScreenProfileImageScreen({required this.imageUrl});
+
+  final String imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        elevation: 0,
+        leading: IconButton(
+          onPressed: () => Navigator.of(context).pop(),
+          icon: const Icon(Icons.close, color: Colors.white),
+        ),
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          minScale: 0.8,
+          maxScale: 4,
+          child: Image.network(
+            imageUrl,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) =>
+                const Icon(Icons.broken_image, color: Colors.white70, size: 56),
+          ),
         ),
       ),
     );
