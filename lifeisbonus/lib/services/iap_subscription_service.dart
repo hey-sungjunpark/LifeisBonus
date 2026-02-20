@@ -32,12 +32,12 @@ class IapSubscriptionService {
 
   static const String androidPackageName = String.fromEnvironment(
     'ANDROID_PACKAGE_NAME',
-    defaultValue: 'com.lifeisbonus.app.lifeisbonus',
+    defaultValue: 'com.lifeisbonus.app',
   );
 
   static const String iosBundleId = String.fromEnvironment(
     'IOS_BUNDLE_ID',
-    defaultValue: 'com.lifeisbonus.app.lifeisbonus',
+    defaultValue: 'com.lifeisbonus.app',
   );
 
   final InAppPurchase _iap = InAppPurchase.instance;

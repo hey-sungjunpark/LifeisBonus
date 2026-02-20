@@ -72,7 +72,7 @@ const PREMIUM_PRODUCT_IDS = String(
   .filter((v) => v.length > 0);
 const APPLE_SHARED_SECRET = String(process.env.APPLE_SHARED_SECRET || "").trim();
 const ANDROID_PACKAGE_NAME = String(
-  process.env.ANDROID_PACKAGE_NAME || "com.lifeisbonus.app.lifeisbonus",
+  process.env.ANDROID_PACKAGE_NAME || "com.lifeisbonus.app",
 ).trim();
 
 async function verifyAppleReceipt({ receiptData, productId }) {

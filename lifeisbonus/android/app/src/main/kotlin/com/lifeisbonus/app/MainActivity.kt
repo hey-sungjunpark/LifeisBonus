@@ -1,4 +1,4 @@
-package com.lifeisbonus.app.lifeisbonus
+package com.lifeisbonus.app
 
 import io.flutter.embedding.android.FlutterFragmentActivity
 

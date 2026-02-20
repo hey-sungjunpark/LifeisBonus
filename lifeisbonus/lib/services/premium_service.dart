@@ -17,7 +17,7 @@ class PremiumStatus {
 class PremiumService {
   static const String _androidPackageName = String.fromEnvironment(
     'ANDROID_PACKAGE_NAME',
-    defaultValue: 'com.lifeisbonus.app.lifeisbonus',
+    defaultValue: 'com.lifeisbonus.app',
   );
 
   static Future<String?> resolveUserDocId() async {

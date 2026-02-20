@@ -10,8 +10,8 @@
 cd /Users/sungjunpark/Project_LifeIsBonus_260112/lifeisbonus
 flutter run \
   --dart-define=PREMIUM_SUBSCRIPTION_PRODUCT_ID=lifeisbonus_premium_monthly_9900 \
-  --dart-define=ANDROID_PACKAGE_NAME=com.lifeisbonus.app.lifeisbonus \
-  --dart-define=IOS_BUNDLE_ID=com.lifeisbonus.app.lifeisbonus
+  --dart-define=ANDROID_PACKAGE_NAME=com.lifeisbonus.app \
+  --dart-define=IOS_BUNDLE_ID=com.lifeisbonus.app
 ```
 
 ## 3) Functions 환경변수 준비
@@ -31,7 +31,7 @@ npm install
 cd /Users/sungjunpark/Project_LifeIsBonus_260112/lifeisbonus
 
 PREMIUM_PRODUCT_IDS=lifeisbonus_premium_monthly_9900 \
-ANDROID_PACKAGE_NAME=com.lifeisbonus.app.lifeisbonus \
+ANDROID_PACKAGE_NAME=com.lifeisbonus.app \
 APPLE_SHARED_SECRET=YOUR_APPLE_SHARED_SECRET \
 firebase deploy --only functions:verifyPremiumPurchase
 ```
