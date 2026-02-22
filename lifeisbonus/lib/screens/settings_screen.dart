@@ -1121,9 +1121,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
       debugPrint('[delete-account] deleted $label: ${snap.size}');
     }
 
+    Future<void> deleteStorageTree(Reference ref, String label) async {
+      try {
+        final result = await ref.listAll();
+        for (final item in result.items) {
+          await item.delete();
+        }
+        for (final prefix in result.prefixes) {
+          await deleteStorageTree(prefix, label);
+        }
+        debugPrint('[delete-account] deleted storage tree: $label');
+      } on FirebaseException catch (e) {
+        if (e.code == 'object-not-found') {
+          return;
+        }
+        rethrow;
+      }
+    }
+
     try {
       final userRef = FirebaseFirestore.instance.collection('users').doc(userDocId);
       debugPrint('[delete-account] userDocId=$userDocId');
+      final storage = FirebaseStorage.instance;
+      await _deleteStorageImageByUrl(_photoUrl);
+      await deleteStorageTree(storage.ref('users/$userDocId/profile'), 'profile');
+      await deleteStorageTree(storage.ref('users/$userDocId/media'), 'media');
       await deleteCollection(userRef.collection('schools'), 'schools');
       await deleteCollection(userRef.collection('neighborhoods'), 'neighborhoods');
       await deleteCollection(userRef.collection('plans'), 'plans');
@@ -1136,11 +1158,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       debugPrint('[delete-account] firestore error: $e');
       if (mounted) {
+        setState(() {
+          _deletingAccount = false;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('탈퇴 중 오류가 발생했어요. ($e)')),
+          SnackBar(content: Text('탈퇴 중 오류가 발생했어요. 정보 삭제를 완료하지 못했습니다. ($e)')),
         );
       }
-    } catch (_) {}
+      return;
+    }
 
     try {
       final currentUser = FirebaseAuth.instance.currentUser;

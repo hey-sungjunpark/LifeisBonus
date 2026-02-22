@@ -20,6 +20,39 @@ class PremiumService {
     defaultValue: 'com.lifeisbonus.app',
   );
 
+  static PremiumStatus _statusFromUserData(Map<String, dynamic>? data) {
+    final premiumUntilValue = data?['premiumUntil'];
+    DateTime? premiumUntil;
+    if (premiumUntilValue is String) {
+      premiumUntil = DateTime.tryParse(premiumUntilValue);
+    }
+    if (premiumUntilValue is Timestamp) {
+      premiumUntil = premiumUntilValue.toDate();
+    }
+
+    final now = DateTime.now();
+    final hasUnexpiredEntitlement =
+        premiumUntil != null && premiumUntil.isAfter(now);
+    final premiumActiveField = data?['premiumActive'];
+    final premiumStoreState = (data?['premiumStoreState'] as String?)?.trim();
+
+    final storeStateBlocksPremium = switch (premiumStoreState) {
+      'SUBSCRIPTION_STATE_EXPIRED' => true,
+      'SUBSCRIPTION_STATE_CANCELED' => true,
+      'SUBSCRIPTION_STATE_REVOKED' => true,
+      'SUBSCRIPTION_STATE_ON_HOLD' => true,
+      'CANCELED' => true,
+      _ => false,
+    };
+
+    final storeActive = premiumActiveField is bool
+        ? premiumActiveField
+        : hasUnexpiredEntitlement;
+    final isPremium =
+        hasUnexpiredEntitlement && storeActive && !storeStateBlocksPremium;
+    return PremiumStatus(isPremium: isPremium, premiumUntil: premiumUntil);
+  }
+
   static Future<String?> resolveUserDocId() async {
     final prefs = await SharedPreferences.getInstance();
     final provider = prefs.getString('lastProvider');
@@ -46,18 +79,7 @@ class PremiumService {
     }
     final doc =
         await FirebaseFirestore.instance.collection('users').doc(docId).get();
-    final data = doc.data();
-    final premiumUntilValue = data?['premiumUntil'];
-    DateTime? premiumUntil;
-    if (premiumUntilValue is String) {
-      premiumUntil = DateTime.tryParse(premiumUntilValue);
-    }
-    if (premiumUntilValue is Timestamp) {
-      premiumUntil = premiumUntilValue.toDate();
-    }
-    final now = DateTime.now();
-    final isPremium = premiumUntil != null && premiumUntil.isAfter(now);
-    return PremiumStatus(isPremium: isPremium, premiumUntil: premiumUntil);
+    return _statusFromUserData(doc.data());
   }
 
   static Stream<PremiumStatus> watchStatus() async* {
@@ -71,51 +93,18 @@ class PremiumService {
         .doc(docId)
         .snapshots()
         .map((doc) {
-      final data = doc.data();
-      final premiumUntilValue = data?['premiumUntil'];
-      DateTime? premiumUntil;
-      if (premiumUntilValue is String) {
-        premiumUntil = DateTime.tryParse(premiumUntilValue);
-      }
-      if (premiumUntilValue is Timestamp) {
-        premiumUntil = premiumUntilValue.toDate();
-      }
-      final now = DateTime.now();
-      final isPremium = premiumUntil != null && premiumUntil.isAfter(now);
-      return PremiumStatus(isPremium: isPremium, premiumUntil: premiumUntil);
+      return _statusFromUserData(doc.data());
     });
   }
 
+  @Deprecated('스토어 검증 기반 구독만 지원합니다. IAP 검증 로직을 사용하세요.')
   static Future<void> activateMonthly({int days = 30}) async {
-    final docId = await resolveUserDocId();
-    if (docId == null) {
-      return;
-    }
-    final now = DateTime.now();
-    final until = now.add(Duration(days: days));
-    await FirebaseFirestore.instance.collection('users').doc(docId).set({
-      'premiumActive': true,
-      'premiumPlan': 'monthly_9900',
-      'premiumAutoRenew': true,
-      'premiumSince': now.toIso8601String(),
-      'premiumUntil': until.toIso8601String(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    throw UnsupportedError('스토어 검증 없이 프리미엄 상태를 직접 변경할 수 없습니다.');
   }
 
+  @Deprecated('스토어 검증 기반 구독만 지원합니다. 스토어 구독 관리 화면을 사용하세요.')
   static Future<void> cancelSubscription() async {
-    final docId = await resolveUserDocId();
-    if (docId == null) {
-      return;
-    }
-    final now = DateTime.now();
-    await FirebaseFirestore.instance.collection('users').doc(docId).set({
-      'premiumActive': false,
-      'premiumAutoRenew': false,
-      'premiumCanceledAt': now.toIso8601String(),
-      'premiumUntil': now.toIso8601String(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    throw UnsupportedError('스토어 구독 해지는 각 스토어 구독 관리 화면에서 처리해야 합니다.');
   }
 
   static Future<Uri?> buildManageSubscriptionUri({String? productId}) async {

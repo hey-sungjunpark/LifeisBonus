@@ -2172,7 +2172,7 @@ class _PremiumCtaCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(999),
               ),
               child: const Text(
-                '월 9,900원으로 시작하기',
+                '프리미엄 구독 시작하기',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 12,

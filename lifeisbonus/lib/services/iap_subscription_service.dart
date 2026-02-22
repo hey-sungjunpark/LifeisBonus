@@ -110,12 +110,14 @@ class IapSubscriptionService {
 
   Future<void> _onPurchaseUpdated(List<PurchaseDetails> purchases) async {
     for (final purchase in purchases) {
+      var shouldCompletePurchase = false;
       try {
         switch (purchase.status) {
           case PurchaseStatus.pending:
             _eventController.add(const IapEvent(type: IapEventType.pending));
             break;
           case PurchaseStatus.error:
+            shouldCompletePurchase = true;
             _eventController.add(
               IapEvent(
                 type: IapEventType.error,
@@ -126,6 +128,7 @@ class IapSubscriptionService {
           case PurchaseStatus.purchased:
           case PurchaseStatus.restored:
             final verification = await _verifyPurchaseOnServer(purchase);
+            shouldCompletePurchase = true;
             final isActive = verification['isActive'] == true;
             final premiumUntilRaw = verification['premiumUntil'] as String?;
             final premiumUntil = premiumUntilRaw == null
@@ -150,6 +153,7 @@ class IapSubscriptionService {
             }
             break;
           case PurchaseStatus.canceled:
+            shouldCompletePurchase = true;
             _eventController.add(
               const IapEvent(
                 type: IapEventType.error,
@@ -162,8 +166,13 @@ class IapSubscriptionService {
         _eventController.add(
           IapEvent(type: IapEventType.error, message: _mapException(e)),
         );
+        // 구매/복원 후 서버 검증 단계에서 실패하면 complete를 미뤄 재시도(복원 포함) 여지를 남긴다.
+        if (purchase.status == PurchaseStatus.purchased ||
+            purchase.status == PurchaseStatus.restored) {
+          shouldCompletePurchase = false;
+        }
       } finally {
-        if (purchase.pendingCompletePurchase) {
+        if (purchase.pendingCompletePurchase && shouldCompletePurchase) {
           await _iap.completePurchase(purchase);
         }
       }

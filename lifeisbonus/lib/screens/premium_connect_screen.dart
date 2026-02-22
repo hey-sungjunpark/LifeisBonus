@@ -5,6 +5,7 @@ import 'dart:io' show Platform;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../services/iap_subscription_service.dart';
 import '../services/match_count_service.dart';
@@ -20,6 +21,11 @@ class PremiumConnectScreen extends StatefulWidget {
 }
 
 class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
+  static const String _privacyPolicyUrl =
+      'https://sore-spatula-c9f.notion.site/30bf010910c6806f8dfce301204521db';
+  static const String _termsOfServiceUrl =
+      'https://sore-spatula-c9f.notion.site/30bf010910c6800a89fdd655046839d4';
+
   final ScrollController _scrollController = ScrollController();
   StreamSubscription<IapEvent>? _iapEventSub;
   bool _loading = true;
@@ -573,6 +579,21 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _openExternalUrl({
+    required String url,
+    required String label,
+  }) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) {
+      _showSnack('$label 링크가 올바르지 않아요.');
+      return;
+    }
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!opened) {
+      _showSnack('$label 페이지를 열 수 없어요.');
+    }
+  }
+
   Future<void> _subscribe() async {
     if (_products.isEmpty) {
       _showSnack('스토어 상품 정보를 불러오는 중입니다. 잠시 후 다시 시도해 주세요.');
@@ -651,9 +672,18 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
                     _SubscribeCard(
                       onSubscribe: _subscribe,
                       onRestore: _restorePurchases,
+                      onOpenPrivacyPolicy: () => _openExternalUrl(
+                        url: _privacyPolicyUrl,
+                        label: '개인정보 처리방침',
+                      ),
+                      onOpenTermsOfService: () => _openExternalUrl(
+                        url: _termsOfServiceUrl,
+                        label: '서비스 이용약관',
+                      ),
                       purchaseInProgress: _purchaseInProgress,
                       restoring: _restoring,
                       loadingProducts: _loadingProducts,
+                      priceLabel: _products.isNotEmpty ? _products.first.price : null,
                       isIOS: Platform.isIOS,
                     ),
                     const SizedBox(height: 16),
@@ -1061,17 +1091,23 @@ class _SubscribeCard extends StatelessWidget {
   const _SubscribeCard({
     required this.onSubscribe,
     required this.onRestore,
+    required this.onOpenPrivacyPolicy,
+    required this.onOpenTermsOfService,
     required this.purchaseInProgress,
     required this.restoring,
     required this.loadingProducts,
+    required this.priceLabel,
     required this.isIOS,
   });
 
   final VoidCallback onSubscribe;
   final VoidCallback onRestore;
+  final VoidCallback onOpenPrivacyPolicy;
+  final VoidCallback onOpenTermsOfService;
   final bool purchaseInProgress;
   final bool restoring;
   final bool loadingProducts;
+  final String? priceLabel;
   final bool isIOS;
 
   @override
@@ -1105,9 +1141,11 @@ class _SubscribeCard extends StatelessWidget {
               ),
             ],
           ),
-          const Text(
-            '월 9,900원으로 소중한 인연 만들기',
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+          Text(
+            priceLabel == null
+                ? '프리미엄 구독으로 소중한 인연 만들기'
+                : '${priceLabel!}로 소중한 인연 만들기',
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
           ),
           const SizedBox(height: 8),
           const Text(
@@ -1153,9 +1191,47 @@ class _SubscribeCard extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           const Text(
+            '월간 구독은 매월 자동 갱신되며, 다음 결제 전까지 스토어에서 해지할 수 있어요.',
+            style: TextStyle(fontSize: 10, color: Color(0xFF8A8A8A)),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 2),
+          const Text(
             '해지는 스토어 구독 관리에서 직접 진행할 수 있어요.',
             style: TextStyle(fontSize: 10, color: Color(0xFF8A8A8A)),
             textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              TextButton(
+                onPressed: onOpenPrivacyPolicy,
+                style: TextButton.styleFrom(
+                  minimumSize: Size.zero,
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text(
+                  '개인정보 처리방침',
+                  style: TextStyle(fontSize: 11),
+                ),
+              ),
+              const Text('·', style: TextStyle(fontSize: 11, color: Color(0xFF8A8A8A))),
+              TextButton(
+                onPressed: onOpenTermsOfService,
+                style: TextButton.styleFrom(
+                  minimumSize: Size.zero,
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text(
+                  '서비스 이용약관',
+                  style: TextStyle(fontSize: 11),
+                ),
+              ),
+            ],
           ),
         ],
       ),

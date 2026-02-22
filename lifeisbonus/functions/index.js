@@ -1,10 +1,12 @@
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onMessagePublished } = require("firebase-functions/v2/pubsub");
 const { initializeApp } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const { google } = require("googleapis");
+const crypto = require("crypto");
 
 initializeApp();
 
@@ -74,6 +76,116 @@ const APPLE_SHARED_SECRET = String(process.env.APPLE_SHARED_SECRET || "").trim()
 const ANDROID_PACKAGE_NAME = String(
   process.env.ANDROID_PACKAGE_NAME || "com.lifeisbonus.app",
 ).trim();
+const GOOGLE_PLAY_RTDN_TOPIC = String(
+  process.env.GOOGLE_PLAY_RTDN_TOPIC || "google-play-rtdn",
+).trim();
+
+function hashPurchaseToken(purchaseToken) {
+  return crypto
+    .createHash("sha256")
+    .update(String(purchaseToken || "").trim())
+    .digest("hex");
+}
+
+function buildPremiumUserPatch(verification) {
+  const expiresAtDate = verification.expiresAtMillis
+    ? new Date(verification.expiresAtMillis)
+    : null;
+  const premiumUntilIso = expiresAtDate ? expiresAtDate.toISOString() : null;
+  return {
+    premiumActive: verification.isActive === true,
+    premiumPlan: verification.productId || null,
+    premiumPlatform: verification.platform || null,
+    premiumAutoRenew: verification.autoRenew === true,
+    premiumStoreState: verification.storeState || "UNKNOWN",
+    premiumUntil: premiumUntilIso,
+    premiumVerifiedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+}
+
+async function persistPremiumVerification({
+  db,
+  uid,
+  verification,
+  source,
+  purchaseToken = null,
+  packageName = null,
+  rawEvent = null,
+}) {
+  const userRef = db.collection("users").doc(uid);
+  const userPatch = buildPremiumUserPatch(verification);
+  await userRef.set(userPatch, { merge: true });
+
+  const premiumUntilIso = userPatch.premiumUntil || null;
+  await userRef.collection("premiumPurchases").add({
+    productId: verification.productId || null,
+    platform: verification.platform || null,
+    storeState: verification.storeState || "UNKNOWN",
+    isActive: verification.isActive === true,
+    autoRenew: verification.autoRenew === true,
+    expiresAt: premiumUntilIso,
+    transactionId: verification.transactionId || null,
+    source: source || "unknown",
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  if (verification.platform === "android" && purchaseToken) {
+    const tokenHash = hashPurchaseToken(purchaseToken);
+    await db.collection("premiumPurchaseTokens").doc(tokenHash).set(
+      {
+        platform: "android",
+        uid,
+        packageName: String(packageName || ANDROID_PACKAGE_NAME).trim(),
+        productId: verification.productId || null,
+        purchaseTokenHash: tokenHash,
+        latestTransactionId: verification.transactionId || null,
+        latestStoreState: verification.storeState || "UNKNOWN",
+        latestIsActive: verification.isActive === true,
+        latestExpiresAt: premiumUntilIso,
+        lastSource: source || "unknown",
+        lastRtdnEvent: rawEvent || null,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }
+
+  return { userPatch, premiumUntilIso };
+}
+
+function parsePubsubJson(event) {
+  const message = event?.data?.message;
+  if (!message) {
+    return null;
+  }
+  if (message.json && typeof message.json === "object") {
+    return message.json;
+  }
+  const encoded = message.data;
+  if (!encoded) {
+    return null;
+  }
+  const decoded = Buffer.from(encoded, "base64").toString("utf8");
+  if (!decoded) {
+    return null;
+  }
+  return JSON.parse(decoded);
+}
+
+function googleApiErrorCode(error) {
+  return Number(
+    error?.code ||
+      error?.statusCode ||
+      error?.response?.status ||
+      error?.cause?.code ||
+      0,
+  );
+}
+
+function isGoogleApiNotFound(error) {
+  return googleApiErrorCode(error) === 404;
+}
 
 async function verifyAppleReceipt({ receiptData, productId }) {
   if (!APPLE_SHARED_SECRET) {
@@ -254,33 +366,13 @@ exports.verifyPremiumPurchase = onCall(
     }
 
     const db = getFirestore();
-    const userRef = db.collection("users").doc(uid);
-    const expiresAtDate = verification.expiresAtMillis
-      ? new Date(verification.expiresAtMillis)
-      : null;
-    const premiumUntilIso = expiresAtDate ? expiresAtDate.toISOString() : null;
-    await userRef.set(
-      {
-        premiumActive: verification.isActive === true,
-        premiumPlan: verification.productId,
-        premiumPlatform: verification.platform,
-        premiumAutoRenew: verification.autoRenew === true,
-        premiumStoreState: verification.storeState,
-        premiumUntil: premiumUntilIso,
-        premiumVerifiedAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    );
-    await userRef.collection("premiumPurchases").add({
-      productId: verification.productId,
-      platform: verification.platform,
-      storeState: verification.storeState,
-      isActive: verification.isActive === true,
-      autoRenew: verification.autoRenew === true,
-      expiresAt: premiumUntilIso,
-      transactionId: verification.transactionId,
-      createdAt: FieldValue.serverTimestamp(),
+    const { premiumUntilIso } = await persistPremiumVerification({
+      db,
+      uid,
+      verification,
+      source: "verifyPremiumPurchase",
+      purchaseToken: platform === "android" ? request.data?.purchaseToken : null,
+      packageName: platform === "android" ? request.data?.androidPackageName : null,
     });
 
     return {
@@ -291,6 +383,101 @@ exports.verifyPremiumPurchase = onCall(
       storeState: verification.storeState,
       autoRenew: verification.autoRenew === true,
     };
+  },
+);
+
+exports.handleGooglePlayRtdn = onMessagePublished(
+  {
+    topic: GOOGLE_PLAY_RTDN_TOPIC,
+    region: "asia-northeast3",
+    retry: true,
+  },
+  async (event) => {
+    let payload;
+    try {
+      payload = parsePubsubJson(event);
+    } catch (error) {
+      console.error("[rtdn] invalid json", error);
+      return;
+    }
+    if (!payload) {
+      console.warn("[rtdn] empty payload");
+      return;
+    }
+
+    const subscriptionNotification = payload.subscriptionNotification || null;
+    if (!subscriptionNotification) {
+      console.log("[rtdn] ignore non-subscription event", payload);
+      return;
+    }
+
+    const purchaseToken = String(subscriptionNotification.purchaseToken || "").trim();
+    const productId = String(subscriptionNotification.subscriptionId || "").trim();
+    const packageName = String(payload.packageName || ANDROID_PACKAGE_NAME).trim();
+    if (!purchaseToken || !productId || !packageName) {
+      console.warn("[rtdn] missing required fields", {
+        hasPurchaseToken: !!purchaseToken,
+        productId,
+        packageName,
+      });
+      return;
+    }
+
+    const db = getFirestore();
+    const tokenHash = hashPurchaseToken(purchaseToken);
+    const tokenMapRef = db.collection("premiumPurchaseTokens").doc(tokenHash);
+    const tokenMapSnap = await tokenMapRef.get();
+    const tokenMapData = tokenMapSnap.data() || null;
+    const uid = tokenMapData?.uid;
+    if (!tokenMapSnap.exists || typeof uid !== "string" || !uid.trim()) {
+      await tokenMapRef.set(
+        {
+          platform: "android",
+          packageName,
+          productId,
+          purchaseTokenHash: tokenHash,
+          lastSource: "rtdn_unmapped",
+          lastRtdnEvent: payload,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      console.warn("[rtdn] unmapped purchase token", { tokenHash, productId });
+      return;
+    }
+
+    let verification;
+    try {
+      verification = await verifyGoogleSubscription({
+        purchaseToken,
+        productId,
+        packageName,
+      });
+    } catch (error) {
+      if (!isGoogleApiNotFound(error)) {
+        throw error;
+      }
+      verification = {
+        isActive: false,
+        platform: "android",
+        productId,
+        storeState: "NOT_FOUND",
+        expiresAtMillis: 0,
+        autoRenew: false,
+        transactionId: null,
+        raw: { rtdnPayload: payload, notFound: true },
+      };
+    }
+
+    await persistPremiumVerification({
+      db,
+      uid: uid.trim(),
+      verification,
+      source: "google_play_rtdn",
+      purchaseToken,
+      packageName,
+      rawEvent: payload,
+    });
   },
 );
 

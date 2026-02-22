@@ -1882,7 +1882,7 @@ class _PeopleCard extends StatelessWidget {
                       child: Text(
                         isPremium
                             ? '프리미엄 이용 중 입니다'
-                            : '월 9,900원으로 소중한 인연 만들기',
+                            : '프리미엄 구독으로 소중한 인연 만들기',
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
