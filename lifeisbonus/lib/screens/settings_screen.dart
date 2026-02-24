@@ -327,7 +327,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         return;
                       }
                       final uri = await PremiumService.buildManageSubscriptionUri(
-                        productId: 'lifeisbonus_premium_monthly_9900',
+                        productId: 'lifeisbonus_premium_monthly',
                       );
                       if (uri == null) {
                         if (!mounted) {
