@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/age_gate_service.dart';
 import 'home_screen.dart';
 import 'sign_up_screen.dart';
+import 'apple_profile_screen.dart';
 import 'google_profile_screen.dart';
 import 'kakao_profile_screen.dart';
 import 'naver_profile_screen.dart';
@@ -138,10 +139,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text(
-          '비밀번호 재설정',
-          style: TextStyle(fontSize: 18),
-        ),
+        title: const Text('비밀번호 재설정', style: TextStyle(fontSize: 18)),
         content: TextField(
           controller: emailController,
           keyboardType: TextInputType.emailAddress,
@@ -196,7 +194,9 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
       await FirebaseAuth.instance.setLanguageCode('ko');
-      await FirebaseAuth.instance.sendPasswordResetEmail(email: normalizedEmail);
+      await FirebaseAuth.instance.sendPasswordResetEmail(
+        email: normalizedEmail,
+      );
       if (!mounted) {
         return;
       }
@@ -471,6 +471,75 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
       _showError('구글 로그인 중 문제가 발생했습니다.');
+    }
+  }
+
+  Future<void> _handleAppleLogin() async {
+    if (Theme.of(context).platform != TargetPlatform.iOS) {
+      return;
+    }
+    try {
+      await _clearAuthSessions();
+      final provider = OAuthProvider('apple.com')
+        ..addScope('email')
+        ..addScope('name');
+      final result = await FirebaseAuth.instance.signInWithProvider(provider);
+      final user = result.user;
+      if (user == null || !mounted) {
+        return;
+      }
+      await _storeLastProvider('apple', user.uid);
+
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      final data = doc.data();
+      final hasBirthDate = data != null && data['birthDate'] != null;
+      final hasNickname =
+          data != null &&
+          data['displayName'] is String &&
+          (data['displayName'] as String).trim().isNotEmpty;
+      if (await _handleUnderAgeIfNeeded(data?['birthDate'])) {
+        return;
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      if (hasBirthDate && hasNickname) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('로그인에 성공했습니다.')));
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+        if (!mounted) {
+          return;
+        }
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
+        );
+      } else {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => const AppleProfileScreen()),
+        );
+      }
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      if (_isLoginCancelled(error)) {
+        return;
+      }
+      _showError(_messageForAuthError(error));
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      if (_isLoginCancelled(error)) {
+        return;
+      }
+      _showError('Apple 로그인 중 문제가 발생했습니다.');
     }
   }
 
@@ -942,6 +1011,15 @@ class _LoginScreenState extends State<LoginScreen> {
                           const _DividerOr(),
                           const SizedBox(height: 18),
                           _SocialButtons(
+                            showAppleButton:
+                                Theme.of(context).platform ==
+                                TargetPlatform.iOS,
+                            onApplePressed: () {
+                              _runSocialLogin(
+                                _handleAppleLogin,
+                                providerLabel: 'Apple',
+                              );
+                            },
                             onGooglePressed: () {
                               _runSocialLogin(
                                 _handleGoogleLogin,
@@ -1206,10 +1284,7 @@ class _LoginCard extends StatelessWidget {
               ),
               child: const Text(
                 '비밀번호를 잊으셨나요?',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Color(0xFF8A8A8A),
-                ),
+                style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
               ),
             ),
           ),
@@ -1567,12 +1642,16 @@ class _DividerOr extends StatelessWidget {
 
 class _SocialButtons extends StatelessWidget {
   const _SocialButtons({
+    required this.showAppleButton,
+    required this.onApplePressed,
     required this.onGooglePressed,
     required this.onKakaoPressed,
     required this.onNaverPressed,
     this.isLoading = false,
   });
 
+  final bool showAppleButton;
+  final VoidCallback onApplePressed;
   final VoidCallback onGooglePressed;
   final VoidCallback onKakaoPressed;
   final VoidCallback onNaverPressed;
@@ -1586,6 +1665,16 @@ class _SocialButtons extends StatelessWidget {
         opacity: isLoading ? 0.7 : 1,
         child: Column(
           children: [
+            if (showAppleButton) ...[
+              _SocialButton(
+                label: 'Apple로 시작하기',
+                background: const Color(0xFF111111),
+                textColor: Colors.white,
+                icon: const Icon(Icons.apple, color: Colors.white, size: 22),
+                onPressed: onApplePressed,
+              ),
+              const SizedBox(height: 12),
+            ],
             _SocialButton(
               label: 'Google로 시작하기',
               background: Colors.white,

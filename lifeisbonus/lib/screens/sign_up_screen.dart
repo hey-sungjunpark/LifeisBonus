@@ -91,13 +91,6 @@ class _SignUpScreenState extends State<SignUpScreen> {
   Future<void> _pickBirthDate() async {
     final now = DateTime.now();
     int selectedYear = _birthDate?.year ?? 1987;
-    int selectedMonth = _birthDate?.month ?? 8;
-    int selectedDay = _birthDate?.day ?? 14;
-
-    int maxDayFor(int year, int month) {
-      final lastDay = DateTime(year, month + 1, 0).day;
-      return lastDay;
-    }
 
     await showModalBottomSheet<void>(
       context: context,
@@ -106,7 +99,6 @@ class _SignUpScreenState extends State<SignUpScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) {
-        final days = maxDayFor(selectedYear, selectedMonth);
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           child: Column(
@@ -122,7 +114,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
               ),
               const SizedBox(height: 12),
               const Text(
-                '생년월일 선택',
+                '출생연도 선택',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
@@ -142,81 +134,25 @@ class _SignUpScreenState extends State<SignUpScreen> {
                 ),
                 child: SizedBox(
                   height: 180,
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: CupertinoPicker(
-                          scrollController: FixedExtentScrollController(
-                            initialItem: selectedYear - 1900,
-                          ),
-                          itemExtent: 36,
-                          selectionOverlay: Container(
-                            decoration: BoxDecoration(
-                              color: const Color(0x1AFF7A3D),
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(
-                                color: const Color(0x33FF7A3D),
-                              ),
-                            ),
-                          ),
-                          onSelectedItemChanged: (index) {
-                            selectedYear = 1900 + index;
-                          },
-                          children: List.generate(
-                            now.year - 1900 + 1,
-                            (index) => Center(child: Text('${1900 + index}년')),
-                          ),
-                        ),
+                  child: CupertinoPicker(
+                    scrollController: FixedExtentScrollController(
+                      initialItem: selectedYear - 1900,
+                    ),
+                    itemExtent: 36,
+                    selectionOverlay: Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0x1AFF7A3D),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0x33FF7A3D)),
                       ),
-                      Expanded(
-                        child: CupertinoPicker(
-                          scrollController: FixedExtentScrollController(
-                            initialItem: selectedMonth - 1,
-                          ),
-                          itemExtent: 36,
-                          selectionOverlay: Container(
-                            decoration: BoxDecoration(
-                              color: const Color(0x1AFF7A3D),
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(
-                                color: const Color(0x33FF7A3D),
-                              ),
-                            ),
-                          ),
-                          onSelectedItemChanged: (index) {
-                            selectedMonth = index + 1;
-                          },
-                          children: List.generate(
-                            12,
-                            (index) => Center(child: Text('${index + 1}월')),
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: CupertinoPicker(
-                          scrollController: FixedExtentScrollController(
-                            initialItem: selectedDay - 1,
-                          ),
-                          itemExtent: 36,
-                          selectionOverlay: Container(
-                            decoration: BoxDecoration(
-                              color: const Color(0x1AFF7A3D),
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(
-                                color: const Color(0x33FF7A3D),
-                              ),
-                            ),
-                          ),
-                          onSelectedItemChanged: (index) {
-                            selectedDay = index + 1;
-                          },
-                          children: List.generate(
-                            days,
-                            (index) => Center(child: Text('${index + 1}일')),
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
+                    onSelectedItemChanged: (index) {
+                      selectedYear = 1900 + index;
+                    },
+                    children: List.generate(
+                      now.year - 1900 + 1,
+                      (index) => Center(child: Text('${1900 + index}년')),
+                    ),
                   ),
                 ),
               ),
@@ -225,16 +161,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
                 width: double.infinity,
                 child: ElevatedButton(
                   onPressed: () {
-                    final maxDay = maxDayFor(selectedYear, selectedMonth);
-                    if (selectedDay > maxDay) {
-                      selectedDay = maxDay;
-                    }
                     setState(() {
-                      _birthDate = DateTime(
-                        selectedYear,
-                        selectedMonth,
-                        selectedDay,
-                      );
+                      _birthDate = DateTime(selectedYear, 12, 31);
                     });
                     Navigator.of(context).pop();
                   },
@@ -263,13 +191,14 @@ class _SignUpScreenState extends State<SignUpScreen> {
   String get _birthDateLabel {
     final date = _birthDate;
     if (date == null) {
-      return '생년월일을 선택하세요';
+      return '출생연도를 선택하세요';
     }
-    return '${date.year}년 ${date.month}월 ${date.day}일';
+    return '${date.year}년';
   }
 
   String _generateTempPassword() {
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const chars =
+        'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     final rand = Random.secure();
     return List.generate(16, (_) => chars[rand.nextInt(chars.length)]).join();
   }
@@ -369,11 +298,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
         if (currentUser != null) {
           await FirebaseAuth.instance.signOut();
         }
-        final credential =
-            await FirebaseAuth.instance.createUserWithEmailAndPassword(
-          email: email,
-          password: _generateTempPassword(),
-        );
+        final credential = await FirebaseAuth.instance
+            .createUserWithEmailAndPassword(
+              email: email,
+              password: _generateTempPassword(),
+            );
         await credential.user?.sendEmailVerification();
       }
       if (!mounted) {
@@ -405,16 +334,16 @@ class _SignUpScreenState extends State<SignUpScreen> {
     }
     await user.reload();
     final refreshed = FirebaseAuth.instance.currentUser;
-      if (refreshed?.emailVerified ?? false) {
-        if (!mounted) {
-          return;
-        }
-        setState(() {
-          _emailVerified = true;
-        });
-        await _scrollToBirthField();
-        _showMessage('이메일 인증이 완료되었습니다.');
-      } else {
+    if (refreshed?.emailVerified ?? false) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _emailVerified = true;
+      });
+      await _scrollToBirthField();
+      _showMessage('이메일 인증이 완료되었습니다.');
+    } else {
       _showMessage('아직 인증되지 않았습니다. 메일을 확인해주세요.');
     }
   }
@@ -556,7 +485,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
       return;
     }
     if (_birthDate == null) {
-      _showMessage('생년월일을 선택해주세요.');
+      _showMessage('출생연도를 선택해주세요.');
       return;
     }
     if (!AgeGateService.isAllowed(_birthDate!)) {
@@ -590,6 +519,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
           'emailLower': email.toLowerCase(),
           'displayName': nickname,
           'displayNameLower': nickname.toLowerCase(),
+          'birthYear': _birthDate!.year,
           'birthDate': _birthDate!.toIso8601String(),
           'createdAt': FieldValue.serverTimestamp(),
           'method': 'email',
@@ -599,6 +529,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
           'phone': _normalizePhoneNumber(_phoneController.text.trim()),
           'displayName': nickname,
           'displayNameLower': nickname.toLowerCase(),
+          'birthYear': _birthDate!.year,
           'birthDate': _birthDate!.toIso8601String(),
           'createdAt': FieldValue.serverTimestamp(),
           'method': 'phone',
@@ -636,9 +567,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _onNicknameChanged() {
@@ -672,9 +603,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
     final hasLetter = RegExp(r'[A-Za-z]').hasMatch(password);
     final hasDigit = RegExp(r'\d').hasMatch(password);
     final hasSymbol = RegExp(r'[^A-Za-z0-9]').hasMatch(password);
-    final typeCount = [hasLetter, hasDigit, hasSymbol]
-        .where((it) => it)
-        .length;
+    final typeCount = [hasLetter, hasDigit, hasSymbol].where((it) => it).length;
     if (typeCount < 2) {
       return '비밀번호는 영문/숫자/특수문자 중 2가지 이상을 포함해야 합니다.';
     }
@@ -691,15 +620,17 @@ class _SignUpScreenState extends State<SignUpScreen> {
   ) async {
     final users = FirebaseFirestore.instance.collection('users');
     final normalized = nickname.toLowerCase();
-    final lowerSnap =
-        await users.where('displayNameLower', isEqualTo: normalized).get();
+    final lowerSnap = await users
+        .where('displayNameLower', isEqualTo: normalized)
+        .get();
     for (final doc in lowerSnap.docs) {
       if (doc.id != currentDocId) {
         return false;
       }
     }
-    final exactSnap =
-        await users.where('displayName', isEqualTo: nickname).get();
+    final exactSnap = await users
+        .where('displayName', isEqualTo: nickname)
+        .get();
     for (final doc in exactSnap.docs) {
       if (doc.id != currentDocId) {
         return false;
@@ -742,10 +673,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [
-              Color(0xFFFFF4E6),
-              Color(0xFFFCE7F1),
-            ],
+            colors: [Color(0xFFFFF4E6), Color(0xFFFCE7F1)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -788,7 +716,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
                         birthFieldKey: _birthFieldKey,
                         verificationSent: _verificationSent,
                         emailVerified: _emailVerified,
-                        onSendVerification: _isVerifying ? null : _sendVerificationEmail,
+                        onSendVerification: _isVerifying
+                            ? null
+                            : _sendVerificationEmail,
                         onCheckVerification: _checkEmailVerified,
                         smsCodeSent: _smsCodeSent,
                         phoneVerified: _phoneVerified,
@@ -815,10 +745,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(12),
                               gradient: const LinearGradient(
-                                colors: [
-                                  Color(0xFFFF7A3D),
-                                  Color(0xFFFF4FA6),
-                                ],
+                                colors: [Color(0xFFFF7A3D), Color(0xFFFF4FA6)],
                               ),
                             ),
                             child: Center(
@@ -829,7 +756,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
                                         valueColor:
-                                            AlwaysStoppedAnimation<Color>(Colors.white),
+                                            AlwaysStoppedAnimation<Color>(
+                                              Colors.white,
+                                            ),
                                       ),
                                     )
                                   : const Text(
@@ -910,10 +839,7 @@ class _Header extends StatelessWidget {
         const SizedBox(height: 6),
         const Text(
           '보너스 게임을 시작할 준비를 해볼까요?',
-          style: TextStyle(
-            fontSize: 12,
-            color: Color(0xFF9B9B9B),
-          ),
+          style: TextStyle(fontSize: 12, color: Color(0xFF9B9B9B)),
         ),
       ],
     );
@@ -921,10 +847,7 @@ class _Header extends StatelessWidget {
 }
 
 class _MethodTabs extends StatelessWidget {
-  const _MethodTabs({
-    required this.currentIndex,
-    required this.onChanged,
-  });
+  const _MethodTabs({required this.currentIndex, required this.onChanged});
 
   final int currentIndex;
   final ValueChanged<int> onChanged;
@@ -1168,8 +1091,9 @@ class _SignUpCard extends StatelessWidget {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      backgroundColor:
-                          emailVerified ? const Color(0xFFE6F7ED) : null,
+                      backgroundColor: emailVerified
+                          ? const Color(0xFFE6F7ED)
+                          : null,
                     ),
                     child: Text(
                       emailVerified
@@ -1246,7 +1170,7 @@ class _SignUpCard extends StatelessWidget {
             KeyedSubtree(
               key: birthFieldKey,
               child: _LabeledField(
-                label: '생년월일',
+                label: '출생연도',
                 hintText: birthDateLabel,
                 readOnly: true,
                 enabled: emailVerified,
@@ -1285,8 +1209,9 @@ class _SignUpCard extends StatelessWidget {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      backgroundColor:
-                          phoneVerified ? const Color(0xFFE6F7ED) : null,
+                      backgroundColor: phoneVerified
+                          ? const Color(0xFFE6F7ED)
+                          : null,
                     ),
                     child: Text(
                       phoneVerified
@@ -1339,7 +1264,7 @@ class _SignUpCard extends StatelessWidget {
             KeyedSubtree(
               key: birthFieldKey,
               child: _LabeledField(
-                label: '생년월일',
+                label: '출생연도',
                 hintText: birthDateLabel,
                 readOnly: true,
                 enabled: phoneVerified,
@@ -1401,15 +1326,14 @@ class _LabeledField extends StatelessWidget {
           onTap: onTap,
           decoration: InputDecoration(
             hintText: hintText,
-            hintStyle: const TextStyle(
-              fontSize: 12,
-              color: Color(0xFFB6B6B6),
-            ),
+            hintStyle: const TextStyle(fontSize: 12, color: Color(0xFFB6B6B6)),
             filled: true,
             fillColor: const Color(0xFFF7F7F7),
             suffixIcon: trailing,
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 12,
+            ),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
               borderSide: BorderSide.none,
@@ -1461,7 +1385,9 @@ class _NicknameRow extends StatelessWidget {
                   hintText: '닉네임을 입력하세요',
                   counterText: '',
                   filled: true,
-                  fillColor: enabled ? const Color(0xFFF7F7F7) : const Color(0xFFEFEFEF),
+                  fillColor: enabled
+                      ? const Color(0xFFF7F7F7)
+                      : const Color(0xFFEFEFEF),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 14,
                     vertical: 12,
@@ -1477,12 +1403,11 @@ class _NicknameRow extends StatelessWidget {
             SizedBox(
               height: 40,
               child: OutlinedButton(
-                onPressed: enabled
-                    ? (isChecking ? null : onCheck)
-                    : null,
+                onPressed: enabled ? (isChecking ? null : onCheck) : null,
                 style: OutlinedButton.styleFrom(
-                  foregroundColor:
-                      isChecked ? const Color(0xFF2FA66A) : const Color(0xFFFF7A3D),
+                  foregroundColor: isChecked
+                      ? const Color(0xFF2FA66A)
+                      : const Color(0xFFFF7A3D),
                   side: BorderSide(
                     color: isChecked
                         ? const Color(0xFF2FA66A)
@@ -1499,15 +1424,15 @@ class _NicknameRow extends StatelessWidget {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : isChecked
-                        ? const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.check_circle, size: 14),
-                              SizedBox(width: 4),
-                              Text('확인됨'),
-                            ],
-                          )
-                        : const Text('중복체크'),
+                    ? const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.check_circle, size: 14),
+                          SizedBox(width: 4),
+                          Text('확인됨'),
+                        ],
+                      )
+                    : const Text('중복체크'),
               ),
             ),
           ],

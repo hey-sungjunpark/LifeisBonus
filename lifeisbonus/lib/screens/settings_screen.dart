@@ -126,15 +126,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
     final authUser = FirebaseAuth.instance.currentUser;
-    final providerIds = authUser?.providerData
-            .map((provider) => provider.providerId)
-            .toSet() ??
+    final providerIds =
+        authUser?.providerData.map((provider) => provider.providerId).toSet() ??
         <String>{};
     _isPasswordAccount = providerIds.contains('password');
     _userDocId = docId;
     try {
-      final doc =
-          await FirebaseFirestore.instance.collection('users').doc(docId).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(docId)
+          .get();
       final data = doc.data();
       final displayName = data?['displayName'];
       final birthDateValue = data?['birthDate'];
@@ -146,7 +147,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _nickname = displayName is String ? displayName.trim() : null;
         _photoUrl = (data?['photoUrl'] as String?)?.trim();
         _avatarEmoji = (data?['avatarEmoji'] as String?)?.trim();
-        _age = birthDate == null ? null : _calculateAge(birthDate, DateTime.now());
+        _age = birthDate == null
+            ? null
+            : _calculateAge(birthDate, DateTime.now());
         if (data?['notificationsEnabled'] is bool) {
           _alertsEnabled = data?['notificationsEnabled'] as bool;
         }
@@ -223,32 +226,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _openPrivacyPolicy() => _openUrlWithRetry(
-    url: _privacyPolicyUrl,
-    label: '개인정보 처리방침',
-  );
+  Future<void> _openPrivacyPolicy() =>
+      _openUrlWithRetry(url: _privacyPolicyUrl, label: '개인정보 처리방침');
 
-  Future<void> _openTermsOfService() => _openUrlWithRetry(
-    url: _termsOfServiceUrl,
-    label: '서비스 이용약관',
-  );
+  Future<void> _openTermsOfService() =>
+      _openUrlWithRetry(url: _termsOfServiceUrl, label: '서비스 이용약관');
 
   Future<void> _openHelpCenter() async {
     if (!mounted) {
       return;
     }
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const _HelpFaqScreen()),
-    );
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const _HelpFaqScreen()));
   }
 
   Future<void> _openCustomerCenter() async {
     if (!mounted) {
       return;
     }
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const _CustomerCenterScreen()),
-    );
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const _CustomerCenterScreen()));
   }
 
   Future<void> _openPremiumManager() async {
@@ -297,7 +296,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 6),
                 Text(
                   '만료 예정일: $untilLabel',
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF8A8A8A)),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF8A8A8A),
+                  ),
                 ),
               ],
               const SizedBox(height: 16),
@@ -326,15 +328,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       if (confirm != true) {
                         return;
                       }
-                      final uri = await PremiumService.buildManageSubscriptionUri(
-                        productId: 'lifeisbonus_premium_monthly',
-                      );
+                      final uri =
+                          await PremiumService.buildManageSubscriptionUri(
+                            productId: 'lifeisbonus_premium_monthly',
+                          );
                       if (uri == null) {
                         if (!mounted) {
                           return;
                         }
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('이 기기에서는 구독 관리를 열 수 없어요.')),
+                          const SnackBar(
+                            content: Text('이 기기에서는 구독 관리를 열 수 없어요.'),
+                          ),
                         );
                         return;
                       }
@@ -347,7 +352,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           return;
                         }
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('스토어 구독 관리 페이지를 열 수 없어요.')),
+                          const SnackBar(
+                            content: Text('스토어 구독 관리 페이지를 열 수 없어요.'),
+                          ),
                         );
                         return;
                       }
@@ -358,7 +365,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         context: context,
                         builder: (context) => AlertDialog(
                           title: const Text('안내'),
-                          content: const Text('스토어 구독 관리 화면으로 이동했습니다.\n해지는 해당 화면에서 완료해 주세요.'),
+                          content: const Text(
+                            '스토어 구독 관리 화면으로 이동했습니다.\n해지는 해당 화면에서 완료해 주세요.',
+                          ),
                           actions: [
                             TextButton(
                               onPressed: () => Navigator.of(context).pop(),
@@ -396,7 +405,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
-                    child: const Text('닫기', style: TextStyle(color: Colors.white)),
+                    child: const Text(
+                      '닫기',
+                      style: TextStyle(color: Colors.white),
+                    ),
                   ),
                 ),
             ],
@@ -440,9 +452,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$email 로 비밀번호 재설정 메일을 보냈어요.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$email 로 비밀번호 재설정 메일을 보냈어요.')));
     } on FirebaseAuthException catch (e) {
       if (!mounted) {
         return;
@@ -505,15 +517,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     final users = FirebaseFirestore.instance.collection('users');
     final normalized = nickname.toLowerCase();
-    final lowerSnap =
-        await users.where('displayNameLower', isEqualTo: normalized).get();
+    final lowerSnap = await users
+        .where('displayNameLower', isEqualTo: normalized)
+        .get();
     for (final doc in lowerSnap.docs) {
       if (doc.id != currentDocId) {
         return false;
       }
     }
-    final exactSnap =
-        await users.where('displayName', isEqualTo: nickname).get();
+    final exactSnap = await users
+        .where('displayName', isEqualTo: nickname)
+        .get();
     for (final doc in exactSnap.docs) {
       if (doc.id != currentDocId) {
         return false;
@@ -530,10 +544,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final ref = FirebaseStorage.instance.ref().child(
       'users/$userDocId/profile/profile.jpg',
     );
-    await ref.putData(
-      bytes,
-      SettableMetadata(contentType: 'image/jpeg'),
-    );
+    await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
     return ref.getDownloadURL();
   }
 
@@ -564,10 +575,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return CircleAvatar(
         radius: 22,
         backgroundColor: const Color(0xFFFFE3D3),
-        child: Text(
-          avatarEmoji.trim(),
-          style: const TextStyle(fontSize: 20),
-        ),
+        child: Text(avatarEmoji.trim(), style: const TextStyle(fontSize: 20)),
       );
     }
     return CircleAvatar(
@@ -738,30 +746,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   .collection('users')
                   .doc(docId)
                   .set({
-                'displayName': nickname,
-                'displayNameLower': nickname.toLowerCase(),
-                'photoUrl':
-                    nextPhotoUrlRaw?.isNotEmpty == true ? nextPhotoUrlRaw : null,
-                'avatarEmoji':
-                    draftAvatarEmoji?.trim().isNotEmpty == true
+                    'displayName': nickname,
+                    'displayNameLower': nickname.toLowerCase(),
+                    'photoUrl': nextPhotoUrlRaw?.isNotEmpty == true
+                        ? nextPhotoUrlRaw
+                        : null,
+                    'avatarEmoji': draftAvatarEmoji?.trim().isNotEmpty == true
                         ? draftAvatarEmoji!.trim()
                         : null,
-                'updatedAt': FieldValue.serverTimestamp(),
-              }, SetOptions(merge: true));
+                    'updatedAt': FieldValue.serverTimestamp(),
+                  }, SetOptions(merge: true));
               if (!mounted) {
                 return;
               }
               setState(() {
                 _nickname = nickname;
-                _photoUrl =
-                    nextPhotoUrlRaw?.isNotEmpty == true ? nextPhotoUrlRaw : null;
+                _photoUrl = nextPhotoUrlRaw?.isNotEmpty == true
+                    ? nextPhotoUrlRaw
+                    : null;
                 _avatarEmoji = draftAvatarEmoji?.trim().isNotEmpty == true
                     ? draftAvatarEmoji!.trim()
                     : null;
               });
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('프로필이 변경되었습니다.')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('프로필이 변경되었습니다.')));
               Navigator.of(context).pop();
             }
 
@@ -787,10 +796,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 16),
                   const Text(
                     '프로필 편집',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                    ),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -812,7 +818,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               onPressed: isUploadingImage
                                   ? null
                                   : () => pickFromGallery(),
-                              icon: const Icon(Icons.photo_library_outlined, size: 16),
+                              icon: const Icon(
+                                Icons.photo_library_outlined,
+                                size: 16,
+                              ),
                               label: const Text('사진 선택'),
                               style: OutlinedButton.styleFrom(
                                 padding: const EdgeInsets.symmetric(
@@ -821,7 +830,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 ),
                                 textStyle: const TextStyle(fontSize: 12),
                                 foregroundColor: const Color(0xFF8E5BFF),
-                                side: const BorderSide(color: Color(0xFF8E5BFF)),
+                                side: const BorderSide(
+                                  color: Color(0xFF8E5BFF),
+                                ),
                               ),
                             ),
                             OutlinedButton.icon(
@@ -847,7 +858,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 child: SizedBox(
                                   width: 16,
                                   height: 16,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
                                 ),
                               ),
                           ],
@@ -941,18 +954,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ? const SizedBox(
                                   width: 16,
                                   height: 16,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
                                 )
                               : isChecked
-                                  ? const Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(Icons.check_circle, size: 14),
-                                        SizedBox(width: 4),
-                                        Text('확인됨'),
-                                      ],
-                                    )
-                                  : const Text('중복체크'),
+                              ? const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.check_circle, size: 14),
+                                    SizedBox(width: 4),
+                                    Text('확인됨'),
+                                  ],
+                                )
+                              : const Text('중복체크'),
                         ),
                       ),
                     ],
@@ -1106,9 +1121,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         setState(() {
           _deletingAccount = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('로그인 정보가 없어 탈퇴할 수 없어요.')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('로그인 정보가 없어 탈퇴할 수 없어요.')));
       }
       return;
     }
@@ -1140,14 +1155,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     try {
-      final userRef = FirebaseFirestore.instance.collection('users').doc(userDocId);
+      final userRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(userDocId);
       debugPrint('[delete-account] userDocId=$userDocId');
       final storage = FirebaseStorage.instance;
       await _deleteStorageImageByUrl(_photoUrl);
-      await deleteStorageTree(storage.ref('users/$userDocId/profile'), 'profile');
+      await deleteStorageTree(
+        storage.ref('users/$userDocId/profile'),
+        'profile',
+      );
       await deleteStorageTree(storage.ref('users/$userDocId/media'), 'media');
       await deleteCollection(userRef.collection('schools'), 'schools');
-      await deleteCollection(userRef.collection('neighborhoods'), 'neighborhoods');
+      await deleteCollection(
+        userRef.collection('neighborhoods'),
+        'neighborhoods',
+      );
       await deleteCollection(userRef.collection('plans'), 'plans');
       await deleteCollection(userRef.collection('memories'), 'memories');
       await deleteCollection(userRef.collection('media'), 'media');
@@ -1212,8 +1235,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ? _nickname!.trim()
         : '닉네임 없음';
     final bonusYearLabel = _age == null ? '보너스 게임 정보 없음' : '보너스 게임 ${_age}년차';
-    final memberLabel =
-        _premiumStatus?.isPremium == true ? '프리미엄 가입자' : '무료 멤버';
+    final memberLabel = _premiumStatus?.isPremium == true
+        ? '프리미엄 가입자'
+        : '무료 멤버';
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
       child: Column(
@@ -1231,7 +1255,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             '앱 설정과 계정 정보를 관리하세요',
             style: TextStyle(
               fontSize: 12,
-              color: isDark ? colorScheme.onSurface.withOpacity(0.6) : const Color(0xFF9B9B9B),
+              color: isDark
+                  ? colorScheme.onSurface.withOpacity(0.6)
+                  : const Color(0xFF9B9B9B),
             ),
           ),
           const SizedBox(height: 16),
@@ -1286,8 +1312,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 OutlinedButton(
                   onPressed: _loadingProfile ? null : _openNicknameEditor,
                   style: OutlinedButton.styleFrom(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 6,
+                    ),
                     side: BorderSide(
                       color: isDark
                           ? colorScheme.outline.withOpacity(0.6)
@@ -1330,11 +1358,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onTap: _sendPasswordResetEmail,
                   ),
                 ],
-                Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
+                Divider(
+                  height: 1,
+                  color: isDark ? colorScheme.outlineVariant : null,
+                ),
                 _SettingRow(
                   icon: Icons.workspace_premium_rounded,
                   label: '프리미엄 구독',
-                  trailing: _Badge(label: _premiumStatus?.isPremium == true ? '프리미엄' : '무료'),
+                  trailing: _Badge(
+                    label: _premiumStatus?.isPremium == true ? '프리미엄' : '무료',
+                  ),
                   onTap: _openPremiumManager,
                 ),
               ],
@@ -1394,25 +1427,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   label: '도움말',
                   onTap: _openHelpCenter,
                 ),
-                Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
+                Divider(
+                  height: 1,
+                  color: isDark ? colorScheme.outlineVariant : null,
+                ),
                 _SettingRow(
                   icon: Icons.privacy_tip_outlined,
                   label: '개인정보 처리방침',
                   onTap: _openPrivacyPolicy,
                 ),
-                Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
+                Divider(
+                  height: 1,
+                  color: isDark ? colorScheme.outlineVariant : null,
+                ),
                 _SettingRow(
                   icon: Icons.description_outlined,
                   label: '서비스 이용약관',
                   onTap: _openTermsOfService,
                 ),
-                Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
+                Divider(
+                  height: 1,
+                  color: isDark ? colorScheme.outlineVariant : null,
+                ),
                 _SettingRow(
                   icon: Icons.support_agent_rounded,
                   label: '고객센터',
                   onTap: _openCustomerCenter,
                 ),
-                Divider(height: 1, color: isDark ? colorScheme.outlineVariant : null),
+                Divider(
+                  height: 1,
+                  color: isDark ? colorScheme.outlineVariant : null,
+                ),
                 _SettingRow(
                   icon: Icons.person_remove_alt_1_rounded,
                   label: _deletingAccount ? '탈퇴 처리 중...' : '탈퇴하기',
@@ -1422,7 +1467,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.chevron_right, color: Color(0xFFBDBDBD)),
+                      : const Icon(
+                          Icons.chevron_right,
+                          color: Color(0xFFBDBDBD),
+                        ),
                   onTap: _deletingAccount ? null : _deleteAccount,
                 ),
               ],
@@ -1589,7 +1637,8 @@ class _SettingRow extends StatelessWidget {
               ),
             ),
             const Spacer(),
-            trailing ?? const Icon(Icons.chevron_right, color: Color(0xFFBDBDBD)),
+            trailing ??
+                const Icon(Icons.chevron_right, color: Color(0xFFBDBDBD)),
           ],
         ),
       ),
@@ -1659,7 +1708,9 @@ class _IconBubble extends StatelessWidget {
       child: Icon(
         icon,
         size: 16,
-        color: isDark ? colorScheme.onSurface.withOpacity(0.7) : const Color(0xFF8A8A8A),
+        color: isDark
+            ? colorScheme.onSurface.withOpacity(0.7)
+            : const Color(0xFF8A8A8A),
       ),
     );
   }
@@ -1685,7 +1736,9 @@ class _Badge extends StatelessWidget {
         label,
         style: TextStyle(
           fontSize: 11,
-          color: isDark ? colorScheme.onPrimaryContainer : const Color(0xFF8E5BFF),
+          color: isDark
+              ? colorScheme.onPrimaryContainer
+              : const Color(0xFF8E5BFF),
           fontWeight: FontWeight.w600,
         ),
       ),
@@ -1698,35 +1751,31 @@ class _HelpFaqScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const faqs = <({String q, String a})>[
+    final isIOSPlatform = Theme.of(context).platform == TargetPlatform.iOS;
+    final refundPolicyText = isIOSPlatform
+        ? '인앱결제 환불은 Apple App Store 결제 정책을 따릅니다. App Store 결제내역에서 환불 요청을 진행해 주세요.'
+        : '인앱결제 환불은 Google Play 결제 정책을 따릅니다. Google Play 결제내역에서 환불 요청을 진행해 주세요.';
+    final faqs = <({String q, String a})>[
       (
         q: '인생은보너스 앱은 어떤 서비스인가요?',
-        a:
-            '학교/동네/추억/계획 기록을 기반으로 비슷한 배경과 계획을 가진 사람을 매칭하고, 프리미엄 구독 시 쪽지로 대화할 수 있는 서비스입니다.'
+        a: '학교/동네/추억/계획 기록을 기반으로 비슷한 배경과 계획을 가진 사람을 매칭하고, 프리미엄 구독 시 쪽지로 대화할 수 있는 서비스입니다.',
       ),
       (
         q: '회원가입 시 만 14세 미만도 이용할 수 있나요?',
-        a: '아니요. 만 14세 미만은 회원가입 및 로그인이 제한됩니다.'
+        a: '아니요. 만 14세 미만은 회원가입 및 로그인이 제한됩니다.',
       ),
       (
         q: '매칭 수는 어떤 기준으로 계산되나요?',
-        a:
-            '학교/동네/계획 조건의 일치 여부를 기준으로 계산합니다. 동일 사용자라도 조건이 다르면 각각 별도 매칭으로 집계될 수 있습니다.'
+        a: '학교/동네/계획 조건의 일치 여부를 기준으로 계산합니다. 동일 사용자라도 조건이 다르면 각각 별도 매칭으로 집계될 수 있습니다.',
       ),
       (
         q: '프리미엄 구독을 해지하면 바로 이용이 중단되나요?',
-        a:
-            '자동갱신만 중단되며, 이미 결제된 이용 기간이 남아 있으면 기간 종료 시점까지 프리미엄 기능을 사용할 수 있습니다.'
+        a: '자동갱신만 중단되며, 이미 결제된 이용 기간이 남아 있으면 기간 종료 시점까지 프리미엄 기능을 사용할 수 있습니다.',
       ),
-      (
-        q: '환불은 어디서 진행하나요?',
-        a:
-            '인앱결제 환불은 Apple App Store / Google Play 결제 정책을 따릅니다. 각 스토어 결제내역에서 환불 요청을 진행해 주세요.'
-      ),
+      (q: '환불은 어디서 진행하나요?', a: refundPolicyText),
       (
         q: '알림이 오지 않을 때는 어떻게 하나요?',
-        a:
-            '앱 설정의 알림 설정이 ON인지 확인하고, 단말 OS 설정에서 인생은보너스 알림 권한(잠금화면/배너/소리)을 허용해 주세요.'
+        a: '앱 설정의 알림 설정이 ON인지 확인하고, 단말 OS 설정에서 인생은보너스 알림 권한(잠금화면/배너/소리)을 허용해 주세요.',
       ),
     ];
 
@@ -1827,7 +1876,11 @@ class _CustomerCenterScreen extends StatelessWidget {
             const SizedBox(height: 12),
             const Text(
               '앱 이용 중 문의 사항 또는 결제/환불 관련 요청은 아래 이메일로 연락해 주세요.',
-              style: TextStyle(fontSize: 14, height: 1.5, color: Color(0xFF66666F)),
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.5,
+                color: Color(0xFF66666F),
+              ),
             ),
             const SizedBox(height: 16),
             Container(

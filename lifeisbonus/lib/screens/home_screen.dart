@@ -11,6 +11,7 @@ import 'plan_screen.dart';
 import 'message_screen.dart';
 import 'settings_screen.dart';
 import 'message_chat_screen.dart';
+import 'apple_profile_screen.dart';
 import 'google_profile_screen.dart';
 import 'kakao_profile_screen.dart';
 import 'naver_profile_screen.dart';
@@ -112,7 +113,8 @@ class _HomeScreenState extends State<HomeScreen> {
               .where((e) => e.isNotEmpty)
               .toSet() ??
           <String>{};
-      final validThread = threadDoc.exists &&
+      final validThread =
+          threadDoc.exists &&
           participants.contains(myUserDocId) &&
           participants.contains(payload.senderId);
       if (!validThread) {
@@ -183,44 +185,46 @@ class _HomeScreenState extends State<HomeScreen> {
         .where('participants', arrayContains: userDocId)
         .snapshots()
         .listen((snapshot) {
-      if (!mounted) {
-        return;
-      }
-      final messenger = ScaffoldMessenger.maybeOf(context);
-      var unreadTotal = 0;
-      for (final doc in snapshot.docs) {
-        unreadTotal += _resolveThreadUnreadCount(doc.data(), userDocId);
-      }
-      if (unreadTotal <= 0 || _currentIndex == 3) {
-        messenger?.hideCurrentSnackBar();
-      }
-      final previous = _lastUnreadTotal ?? 0;
-      if (!_seededUnread) {
-        _seededUnread = true;
-      } else if (_alertsEnabled && _currentIndex != 3 && unreadTotal > previous) {
-        messenger?.hideCurrentSnackBar();
-        messenger?.showSnackBar(
-          SnackBar(
-            content: const Text('새 쪽지가 도착했어요.'),
-            behavior: SnackBarBehavior.floating,
-            action: SnackBarAction(
-              label: '보기',
-              onPressed: () {
-                if (!mounted) {
-                  return;
-                }
-                ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
-                setState(() {
-                  _currentIndex = 3;
-                  _messageAutoOpenToken += 1;
-                });
-              },
-            ),
-          ),
-        );
-      }
-      _lastUnreadTotal = unreadTotal;
-    });
+          if (!mounted) {
+            return;
+          }
+          final messenger = ScaffoldMessenger.maybeOf(context);
+          var unreadTotal = 0;
+          for (final doc in snapshot.docs) {
+            unreadTotal += _resolveThreadUnreadCount(doc.data(), userDocId);
+          }
+          if (unreadTotal <= 0 || _currentIndex == 3) {
+            messenger?.hideCurrentSnackBar();
+          }
+          final previous = _lastUnreadTotal ?? 0;
+          if (!_seededUnread) {
+            _seededUnread = true;
+          } else if (_alertsEnabled &&
+              _currentIndex != 3 &&
+              unreadTotal > previous) {
+            messenger?.hideCurrentSnackBar();
+            messenger?.showSnackBar(
+              SnackBar(
+                content: const Text('새 쪽지가 도착했어요.'),
+                behavior: SnackBarBehavior.floating,
+                action: SnackBarAction(
+                  label: '보기',
+                  onPressed: () {
+                    if (!mounted) {
+                      return;
+                    }
+                    ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+                    setState(() {
+                      _currentIndex = 3;
+                      _messageAutoOpenToken += 1;
+                    });
+                  },
+                ),
+              ),
+            );
+          }
+          _lastUnreadTotal = unreadTotal;
+        });
   }
 
   Future<void> _ensureNickname() async {
@@ -281,6 +285,12 @@ class _HomeScreenState extends State<HomeScreen> {
         MaterialPageRoute(
           builder: (context) => NaverProfileScreen(naverId: providerId),
         ),
+      );
+      return;
+    }
+    if (provider == 'apple') {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (context) => const AppleProfileScreen()),
       );
       return;
     }
@@ -450,10 +460,7 @@ class _HomeBodyContentState extends State<_HomeBodyContent> {
                   return ValueListenableBuilder<_MatchCounts>(
                     valueListenable: _matchCountsNotifier,
                     builder: (context, counts, __) {
-                      return _PeopleCard(
-                        counts: counts,
-                        isLoading: isLoading,
-                      );
+                      return _PeopleCard(counts: counts, isLoading: isLoading);
                     },
                   );
                 },
@@ -1806,9 +1813,7 @@ class _PeopleCard extends StatelessWidget {
             ),
           const SizedBox(height: 6),
           Text(
-            isLoading
-                ? '매칭 정보를 불러오는 중이에요'
-                : '나와 비슷한 기록과 계획을 가진 사람들이 있습니다',
+            isLoading ? '매칭 정보를 불러오는 중이에요' : '나와 비슷한 기록과 계획을 가진 사람들이 있습니다',
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 11, color: Color(0xFF9B9B9B)),
           ),
@@ -1880,9 +1885,7 @@ class _PeopleCard extends StatelessWidget {
                     ),
                     child: Center(
                       child: Text(
-                        isPremium
-                            ? '프리미엄 이용 중 입니다'
-                            : '프리미엄 구독으로 소중한 인연 만들기',
+                        isPremium ? '프리미엄 이용 중 입니다' : '프리미엄 구독으로 소중한 인연 만들기',
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
@@ -2809,8 +2812,8 @@ int _resolveThreadUnreadCount(Map<String, dynamic> data, String userId) {
   }
 
   final lastReadAtMap = (data['lastReadAt'] as Map?)?.cast<String, dynamic>();
-  final lastReadAtClientMap =
-      (data['lastReadAtClient'] as Map?)?.cast<String, dynamic>();
+  final lastReadAtClientMap = (data['lastReadAtClient'] as Map?)
+      ?.cast<String, dynamic>();
   DateTime? lastReadAt;
   final lastReadValue = lastReadAtMap?[userId] ?? data['lastReadAt.$userId'];
   final lastReadClientValue =

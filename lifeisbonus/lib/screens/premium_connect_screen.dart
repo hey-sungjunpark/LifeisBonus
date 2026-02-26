@@ -99,7 +99,9 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
       });
     } catch (e) {
       if (mounted) {
-        _showSnack('구독 상품 정보를 불러오지 못했어요. (${e.toString().replaceAll('Exception: ', '')})');
+        _showSnack(
+          '구독 상품 정보를 불러오지 못했어요. (${e.toString().replaceAll('Exception: ', '')})',
+        );
       }
     } finally {
       if (mounted) {
@@ -576,7 +578,9 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _openExternalUrl({
@@ -611,7 +615,9 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
       setState(() {
         _purchaseInProgress = false;
       });
-      _showSnack('결제를 시작할 수 없어요. (${e.toString().replaceAll('Exception: ', '')})');
+      _showSnack(
+        '결제를 시작할 수 없어요. (${e.toString().replaceAll('Exception: ', '')})',
+      );
     }
   }
 
@@ -629,7 +635,9 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
       setState(() {
         _restoring = false;
       });
-      _showSnack('복원 요청에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})');
+      _showSnack(
+        '복원 요청에 실패했어요. (${e.toString().replaceAll('Exception: ', '')})',
+      );
     }
   }
 
@@ -683,7 +691,9 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
                       purchaseInProgress: _purchaseInProgress,
                       restoring: _restoring,
                       loadingProducts: _loadingProducts,
-                      priceLabel: _products.isNotEmpty ? _products.first.price : null,
+                      priceLabel: _products.isNotEmpty
+                          ? _products.first.price
+                          : null,
                       isIOS: Platform.isIOS,
                     ),
                     const SizedBox(height: 16),
@@ -1132,7 +1142,7 @@ class _SubscribeCard extends StatelessWidget {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : Text(
-                        isIOS ? '구매 복원 (App Store)' : '구매 복원',
+                        isIOS ? '구매 복원 (App Store)' : '구매 복원 (Google Play)',
                         style: const TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
@@ -1158,7 +1168,9 @@ class _SubscribeCard extends StatelessWidget {
             width: double.infinity,
             height: 46,
             child: ElevatedButton(
-              onPressed: (purchaseInProgress || loadingProducts) ? null : onSubscribe,
+              onPressed: (purchaseInProgress || loadingProducts)
+                  ? null
+                  : onSubscribe,
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFFF7A3D),
                 shape: RoundedRectangleBorder(
@@ -1184,8 +1196,10 @@ class _SubscribeCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
-            '결제/환불은 App Store 및 Google Play 정책이 적용됩니다.',
+          Text(
+            isIOS
+                ? '결제/환불은 App Store 정책이 적용됩니다.'
+                : '결제/환불은 Google Play 정책이 적용됩니다.',
             style: TextStyle(fontSize: 10, color: Color(0xFF8A8A8A)),
             textAlign: TextAlign.center,
           ),
@@ -1210,26 +1224,29 @@ class _SubscribeCard extends StatelessWidget {
                 onPressed: onOpenPrivacyPolicy,
                 style: TextButton.styleFrom(
                   minimumSize: Size.zero,
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                child: const Text(
-                  '개인정보 처리방침',
-                  style: TextStyle(fontSize: 11),
-                ),
+                child: const Text('개인정보 처리방침', style: TextStyle(fontSize: 11)),
               ),
-              const Text('·', style: TextStyle(fontSize: 11, color: Color(0xFF8A8A8A))),
+              const Text(
+                '·',
+                style: TextStyle(fontSize: 11, color: Color(0xFF8A8A8A)),
+              ),
               TextButton(
                 onPressed: onOpenTermsOfService,
                 style: TextButton.styleFrom(
                   minimumSize: Size.zero,
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                child: const Text(
-                  '서비스 이용약관',
-                  style: TextStyle(fontSize: 11),
-                ),
+                child: const Text('서비스 이용약관', style: TextStyle(fontSize: 11)),
               ),
             ],
           ),

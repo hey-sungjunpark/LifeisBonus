@@ -1,27 +1,19 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../services/age_gate_service.dart';
 import 'home_screen.dart';
 
-class KakaoProfileScreen extends StatefulWidget {
-  const KakaoProfileScreen({
-    super.key,
-    required this.kakaoId,
-    this.email,
-    this.nickname,
-  });
-
-  final String kakaoId;
-  final String? email;
-  final String? nickname;
+class AppleProfileScreen extends StatefulWidget {
+  const AppleProfileScreen({super.key});
 
   @override
-  State<KakaoProfileScreen> createState() => _KakaoProfileScreenState();
+  State<AppleProfileScreen> createState() => _AppleProfileScreenState();
 }
 
-class _KakaoProfileScreenState extends State<KakaoProfileScreen> {
+class _AppleProfileScreenState extends State<AppleProfileScreen> {
   DateTime? _birthDate;
   bool _birthDateLocked = false;
   bool _isSaving = false;
@@ -58,7 +50,8 @@ class _KakaoProfileScreenState extends State<KakaoProfileScreen> {
   @override
   void initState() {
     super.initState();
-    _nicknameController.text = widget.nickname?.trim() ?? '';
+    final user = FirebaseAuth.instance.currentUser;
+    _nicknameController.text = user?.displayName?.trim() ?? '';
     _nicknameController.addListener(_onNicknameChanged);
     _loadExistingProfile();
   }
@@ -72,9 +65,13 @@ class _KakaoProfileScreenState extends State<KakaoProfileScreen> {
 
   Future<void> _loadExistingProfile() async {
     try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        return;
+      }
       final doc = await FirebaseFirestore.instance
           .collection('users')
-          .doc('kakao:${widget.kakaoId}')
+          .doc(user.uid)
           .get();
       final data = doc.data();
       if (data == null) {
@@ -206,7 +203,11 @@ class _KakaoProfileScreenState extends State<KakaoProfileScreen> {
   }
 
   Future<void> _saveProfile() async {
-    final resolvedNickname = _resolveNickname();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return;
+    }
+    final resolvedNickname = _resolveNickname(user.displayName);
     if (resolvedNickname == null) {
       ScaffoldMessenger.of(
         context,
@@ -241,7 +242,7 @@ class _KakaoProfileScreenState extends State<KakaoProfileScreen> {
       if (!_isNicknameChecked || _lastCheckedNickname != resolvedNickname) {
         final isAvailable = await _isNicknameAvailable(
           resolvedNickname,
-          'kakao:${widget.kakaoId}',
+          user.uid,
         );
         if (!isAvailable) {
           if (!mounted) {
@@ -256,14 +257,13 @@ class _KakaoProfileScreenState extends State<KakaoProfileScreen> {
         _lastCheckedNickname = resolvedNickname;
       }
       final users = FirebaseFirestore.instance.collection('users');
-      await users.doc('kakao:${widget.kakaoId}').set({
-        'email': widget.email,
+      await users.doc(user.uid).set({
+        'email': user.email,
         'displayName': resolvedNickname,
         'displayNameLower': resolvedNickname.toLowerCase(),
         'birthYear': _birthDate!.year,
         'birthDate': _birthDate!.toIso8601String(),
-        'method': 'kakao',
-        'providerId': widget.kakaoId,
+        'method': 'apple',
         'updatedAt': FieldValue.serverTimestamp(),
         'createdAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -314,10 +314,11 @@ class _KakaoProfileScreenState extends State<KakaoProfileScreen> {
     setState(() {
       _isCheckingNickname = true;
     });
-    final available = await _isNicknameAvailable(
-      nickname,
-      'kakao:${widget.kakaoId}',
-    );
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return;
+    }
+    final available = await _isNicknameAvailable(nickname, user.uid);
     if (!mounted) {
       return;
     }
@@ -333,14 +334,14 @@ class _KakaoProfileScreenState extends State<KakaoProfileScreen> {
     );
   }
 
-  String? _resolveNickname() {
+  String? _resolveNickname(String? fallback) {
     final input = _nicknameController.text.trim();
     if (input.isNotEmpty) {
       return input;
     }
-    final fallback = widget.nickname?.trim();
-    if (fallback != null && fallback.isNotEmpty) {
-      return fallback;
+    final trimmed = fallback?.trim();
+    if (trimmed != null && trimmed.isNotEmpty) {
+      return trimmed;
     }
     return null;
   }
@@ -402,176 +403,213 @@ class _KakaoProfileScreenState extends State<KakaoProfileScreen> {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 26),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const SizedBox(height: 26),
+                const SizedBox(height: 20),
                 const Text(
-                  '카카오로 시작하기',
+                  '추가 정보 입력',
                   style: TextStyle(
-                    fontSize: 22,
+                    fontSize: 20,
                     fontWeight: FontWeight.w700,
-                    color: Color(0xFF3D3D3D),
+                    color: Color(0xFF5E5E5E),
                   ),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  _birthDateLocked ? '닉네임만 입력해주세요.' : '최초 로그인이라 출생연도를 입력해주세요.',
+                  _birthDateLocked
+                      ? '닉네임만 입력해주세요.'
+                      : 'Apple 로그인 후 출생연도를 입력해주세요.',
                   style: const TextStyle(
                     fontSize: 12,
-                    color: Color(0xFF8D8D8D),
-                  ),
-                ),
-                const SizedBox(height: 26),
-                const Text(
-                  '닉네임',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF8D8D8D),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _nicknameController,
-                        maxLength: _maxNicknameLength,
-                        decoration: InputDecoration(
-                          hintText: '닉네임을 입력하세요',
-                          counterText: '',
-                          filled: true,
-                          fillColor: Colors.white,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: const BorderSide(
-                              color: Color(0xFFE3E3E3),
-                            ),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: const BorderSide(
-                              color: Color(0xFFE3E3E3),
-                            ),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: const BorderSide(
-                              color: Color(0xFFFF7A3D),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    SizedBox(
-                      height: 46,
-                      child: OutlinedButton(
-                        onPressed: _isCheckingNickname
-                            ? null
-                            : _checkNicknameAvailability,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: _isNicknameChecked
-                              ? const Color(0xFF2FA66A)
-                              : const Color(0xFFFF7A3D),
-                          side: BorderSide(
-                            color: _isNicknameChecked
-                                ? const Color(0xFF2FA66A)
-                                : const Color(0xFFFF7A3D),
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: _isCheckingNickname
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : _isNicknameChecked
-                            ? const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.check_circle, size: 14),
-                                  SizedBox(width: 4),
-                                  Text('확인됨'),
-                                ],
-                              )
-                            : const Text('중복체크'),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                GestureDetector(
-                  onTap: _birthDateLocked ? null : _pickBirthDate,
-                  child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 14,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _birthDateLocked
-                          ? const Color(0xFFF5F5F5)
-                          : Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: const Color(0xFFE3E3E3)),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          _birthDateLabel,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            color: Color(0xFF4C4C4C),
-                          ),
-                        ),
-                        const Icon(
-                          Icons.calendar_today_outlined,
-                          size: 18,
-                          color: Color(0xFF9B9B9B),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const Spacer(),
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: ElevatedButton(
-                    onPressed: _isSaving ? null : _saveProfile,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFFF7A3D),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                    child: _isSaving
-                        ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Text(
-                            '저장하고 시작하기',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
-                          ),
+                    color: Color(0xFF9B9B9B),
                   ),
                 ),
                 const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 20,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x22000000),
+                        blurRadius: 18,
+                        offset: Offset(0, 10),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '닉네임',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF6F6F6F),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _nicknameController,
+                              maxLength: _maxNicknameLength,
+                              decoration: InputDecoration(
+                                hintText: '닉네임을 입력하세요',
+                                counterText: '',
+                                filled: true,
+                                fillColor: const Color(0xFFF7F7F7),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: BorderSide.none,
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFFFF7A3D),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          SizedBox(
+                            height: 40,
+                            child: OutlinedButton(
+                              onPressed: _isCheckingNickname
+                                  ? null
+                                  : _checkNicknameAvailability,
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _isNicknameChecked
+                                    ? const Color(0xFF2FA66A)
+                                    : const Color(0xFFFF7A3D),
+                                side: BorderSide(
+                                  color: _isNicknameChecked
+                                      ? const Color(0xFF2FA66A)
+                                      : const Color(0xFFFF7A3D),
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              child: _isCheckingNickname
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : _isNicknameChecked
+                                  ? const Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.check_circle, size: 14),
+                                        SizedBox(width: 4),
+                                        Text('확인됨'),
+                                      ],
+                                    )
+                                  : const Text('중복체크'),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        '출생연도',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF6F6F6F),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      GestureDetector(
+                        onTap: _birthDateLocked ? null : _pickBirthDate,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: _birthDateLocked
+                                ? const Color(0xFFEFEFEF)
+                                : const Color(0xFFF7F7F7),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                _birthDateLabel,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: _birthDate == null
+                                      ? const Color(0xFFB6B6B6)
+                                      : const Color(0xFF4C4C4C),
+                                ),
+                              ),
+                              const Icon(
+                                Icons.keyboard_arrow_down_rounded,
+                                color: Color(0xFFB6B6B6),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        height: 46,
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _isSaving ? null : _saveProfile,
+                          style: ElevatedButton.styleFrom(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            padding: EdgeInsets.zero,
+                            backgroundColor: Colors.transparent,
+                            shadowColor: Colors.transparent,
+                          ),
+                          child: Ink(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFFFF7A3D), Color(0xFFFF4FA6)],
+                              ),
+                            ),
+                            child: Center(
+                              child: _isSaving
+                                  ? const SizedBox(
+                                      height: 18,
+                                      width: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                              Colors.white,
+                                            ),
+                                      ),
+                                    )
+                                  : const Text(
+                                      '저장하고 시작하기',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
