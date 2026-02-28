@@ -33,6 +33,7 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
   bool _restoring = false;
   bool _loadingProducts = true;
   List<ProductDetails> _products = const [];
+  String? _productLoadError;
   PremiumStatus? _status;
   int _schoolMatchCount = 0;
   int _neighborhoodMatchCount = 0;
@@ -90,6 +91,30 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
     });
     try {
       await IapSubscriptionService.instance.initialize();
+      await _loadProducts();
+    } catch (e) {
+      if (mounted) {
+        _showSnack(
+          '구독 상품 정보를 불러오지 못했어요. (${e.toString().replaceAll('Exception: ', '')})',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingProducts = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadProducts() async {
+    if (mounted) {
+      setState(() {
+        _loadingProducts = true;
+        _productLoadError = null;
+      });
+    }
+    try {
       final products = await IapSubscriptionService.instance.queryProducts();
       if (!mounted) {
         return;
@@ -98,11 +123,15 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
         _products = products;
       });
     } catch (e) {
-      if (mounted) {
-        _showSnack(
-          '구독 상품 정보를 불러오지 못했어요. (${e.toString().replaceAll('Exception: ', '')})',
-        );
+      if (!mounted) {
+        return;
       }
+      final message = e.toString().replaceAll('Exception: ', '');
+      setState(() {
+        _products = const [];
+        _productLoadError = message;
+      });
+      _showSnack('구독 상품 정보를 불러오지 못했어요. ($message)');
     } finally {
       if (mounted) {
         setState(() {
@@ -691,10 +720,13 @@ class _PremiumConnectScreenState extends State<PremiumConnectScreen> {
                       purchaseInProgress: _purchaseInProgress,
                       restoring: _restoring,
                       loadingProducts: _loadingProducts,
+                      productLoadError: _productLoadError,
                       priceLabel: _products.isNotEmpty
                           ? _products.first.price
                           : null,
                       isIOS: Platform.isIOS,
+                      hasProducts: _products.isNotEmpty,
+                      onRetryLoadProducts: _loadProducts,
                     ),
                     const SizedBox(height: 16),
                   ] else ...[
@@ -1106,8 +1138,11 @@ class _SubscribeCard extends StatelessWidget {
     required this.purchaseInProgress,
     required this.restoring,
     required this.loadingProducts,
+    required this.productLoadError,
     required this.priceLabel,
     required this.isIOS,
+    required this.hasProducts,
+    required this.onRetryLoadProducts,
   });
 
   final VoidCallback onSubscribe;
@@ -1117,8 +1152,11 @@ class _SubscribeCard extends StatelessWidget {
   final bool purchaseInProgress;
   final bool restoring;
   final bool loadingProducts;
+  final String? productLoadError;
   final String? priceLabel;
   final bool isIOS;
+  final bool hasProducts;
+  final Future<void> Function() onRetryLoadProducts;
 
   @override
   Widget build(BuildContext context) {
@@ -1164,11 +1202,49 @@ class _SubscribeCard extends StatelessWidget {
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 12),
+          if (productLoadError != null) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.72),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    '구독 상품을 불러오지 못했습니다.',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF9A3F14),
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    productLoadError!,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF7A5B52),
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: loadingProducts ? null : onRetryLoadProducts,
+                    child: const Text('상품 다시 불러오기'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           SizedBox(
             width: double.infinity,
             height: 46,
             child: ElevatedButton(
-              onPressed: (purchaseInProgress || loadingProducts)
+              onPressed: (purchaseInProgress || loadingProducts || !hasProducts)
                   ? null
                   : onSubscribe,
               style: ElevatedButton.styleFrom(
@@ -1187,7 +1263,11 @@ class _SubscribeCard extends StatelessWidget {
                       ),
                     )
                   : Text(
-                      loadingProducts ? '상품 조회 중...' : '구독 시작하기',
+                      loadingProducts
+                          ? '상품 조회 중...'
+                          : hasProducts
+                          ? '구독 시작하기'
+                          : '상품 확인 필요',
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.w700,

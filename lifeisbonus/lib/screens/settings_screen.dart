@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/app_settings_service.dart';
+import '../services/iap_subscription_service.dart';
 import '../services/premium_service.dart';
 import '../services/push_notification_service.dart';
 import 'login_screen.dart';
@@ -330,7 +331,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       }
                       final uri =
                           await PremiumService.buildManageSubscriptionUri(
-                            productId: 'lifeisbonus_premium_monthly',
+                            productId:
+                                IapSubscriptionService.productId,
                           );
                       if (uri == null) {
                         if (!mounted) {

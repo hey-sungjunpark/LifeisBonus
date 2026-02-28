@@ -27,7 +27,7 @@ class IapSubscriptionService {
 
   static const String productId = String.fromEnvironment(
     'PREMIUM_SUBSCRIPTION_PRODUCT_ID',
-    defaultValue: 'lifeisbonus_premium_monthly',
+    defaultValue: 'lifeisbonus_premium_monthly_9900',
   );
 
   static const String androidPackageName = String.fromEnvironment(
