@@ -68,8 +68,11 @@ class IapSubscriptionService {
 
   Future<List<ProductDetails>> queryProducts() async {
     await initialize();
+    // Re-check availability on every query. If the first check happened too
+    // early during app startup, StoreKit can report unavailable temporarily.
+    _storeAvailable = await _iap.isAvailable();
     if (!_storeAvailable) {
-      return const <ProductDetails>[];
+      throw Exception('스토어 연결을 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.');
     }
     final response = await _iap.queryProductDetails({productId});
     if (response.error != null) {
@@ -83,6 +86,7 @@ class IapSubscriptionService {
 
   Future<void> buy(ProductDetails product) async {
     await initialize();
+    _storeAvailable = await _iap.isAvailable();
     if (!_storeAvailable) {
       throw Exception('스토어 연결을 사용할 수 없습니다.');
     }
@@ -102,6 +106,7 @@ class IapSubscriptionService {
 
   Future<void> restore() async {
     await initialize();
+    _storeAvailable = await _iap.isAvailable();
     if (!_storeAvailable) {
       throw Exception('스토어 연결을 사용할 수 없습니다.');
     }
