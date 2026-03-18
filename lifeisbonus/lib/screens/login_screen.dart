@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/age_gate_service.dart';
+import '../services/app_environment_service.dart';
 import 'home_screen.dart';
 import 'sign_up_screen.dart';
 import 'apple_profile_screen.dart';
@@ -272,6 +273,10 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _isVerifying = true;
     });
+    final isIosSimulator = await _preparePhoneAuthForCurrentEnvironment();
+    if (isIosSimulator && mounted) {
+      _showError('iPhone 시뮬레이터에서는 Firebase 테스트 전화번호만 사용할 수 있어요.');
+    }
     try {
       await FirebaseAuth.instance.verifyPhoneNumber(
         phoneNumber: normalized,
@@ -295,7 +300,12 @@ class _LoginScreenState extends State<LoginScreen> {
           setState(() {
             _isVerifying = false;
           });
-          _showError('인증에 실패했습니다. (${error.code})');
+          _showError(
+            _messageForPhoneAuthError(
+              error,
+              isIosSimulator: isIosSimulator,
+            ),
+          );
         },
         codeSent: (verificationId, resendToken) {
           if (!mounted) {
@@ -316,6 +326,15 @@ class _LoginScreenState extends State<LoginScreen> {
             });
           }
         },
+      );
+    } on FirebaseAuthException catch (error) {
+      if (mounted) {
+        setState(() {
+          _isVerifying = false;
+        });
+      }
+      _showError(
+        _messageForPhoneAuthError(error, isIosSimulator: isIosSimulator),
       );
     } catch (_) {
       if (mounted) {
@@ -362,6 +381,41 @@ class _LoginScreenState extends State<LoginScreen> {
         });
       }
       _showError('인증에 실패했습니다. (${error.code})');
+    }
+  }
+
+  Future<bool> _preparePhoneAuthForCurrentEnvironment() async {
+    final isIosSimulator = await AppEnvironmentService.isIosSimulator();
+    await FirebaseAuth.instance.setSettings(
+      appVerificationDisabledForTesting: isIosSimulator,
+    );
+    return isIosSimulator;
+  }
+
+  String _messageForPhoneAuthError(
+    FirebaseAuthException error, {
+    required bool isIosSimulator,
+  }) {
+    switch (error.code) {
+      case 'invalid-phone-number':
+        return '전화번호 형식이 올바르지 않습니다.';
+      case 'missing-phone-number':
+        return '전화번호를 입력해주세요.';
+      case 'quota-exceeded':
+        return '인증 요청 횟수가 너무 많습니다. 잠시 후 다시 시도해주세요.';
+      case 'too-many-requests':
+        return '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.';
+      case 'captcha-check-failed':
+      case 'web-context-cancelled':
+        if (isIosSimulator) {
+          return '시뮬레이터에서는 Firebase 콘솔에 등록한 테스트 전화번호로만 인증할 수 있어요.';
+        }
+        return '전화번호 인증 화면을 완료하지 못했습니다. 다시 시도해주세요.';
+      default:
+        if (isIosSimulator) {
+          return '시뮬레이터에서는 Firebase 콘솔에 등록한 테스트 전화번호만 사용할 수 있어요. (${error.code})';
+        }
+        return '인증에 실패했습니다. (${error.code})';
     }
   }
 

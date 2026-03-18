@@ -66,12 +66,20 @@ function moderateChatText(rawText) {
   };
 }
 
-const PREMIUM_PRODUCT_IDS = String(
-  process.env.PREMIUM_PRODUCT_IDS || "lifeisbonus_premium_monthly_9900",
-)
-  .split(",")
-  .map((v) => v.trim())
-  .filter((v) => v.length > 0);
+function parseCsvEnv(value) {
+  return String(value || "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+}
+
+const ANDROID_PREMIUM_PRODUCT_IDS = parseCsvEnv(
+  process.env.ANDROID_PREMIUM_PRODUCT_IDS || process.env.PREMIUM_PRODUCT_IDS ||
+    "lifeisbonus_premium_monthly",
+);
+const IOS_PREMIUM_PRODUCT_IDS = parseCsvEnv(
+  process.env.IOS_PREMIUM_PRODUCT_IDS || "lifeisbonus_premium_monthly_9900",
+);
 const APPLE_SHARED_SECRET = String(process.env.APPLE_SHARED_SECRET || "").trim();
 const ANDROID_PACKAGE_NAME = String(
   process.env.ANDROID_PACKAGE_NAME || "com.lifeisbonus.app",
@@ -79,6 +87,16 @@ const ANDROID_PACKAGE_NAME = String(
 const GOOGLE_PLAY_RTDN_TOPIC = String(
   process.env.GOOGLE_PLAY_RTDN_TOPIC || "google-play-rtdn",
 ).trim();
+
+function allowedProductIdsForPlatform(platform) {
+  if (platform === "ios") {
+    return IOS_PREMIUM_PRODUCT_IDS;
+  }
+  if (platform === "android") {
+    return ANDROID_PREMIUM_PRODUCT_IDS;
+  }
+  return [];
+}
 
 function hashPurchaseToken(purchaseToken) {
   return crypto
@@ -337,7 +355,8 @@ exports.verifyPremiumPurchase = onCall(
     if (!platform || !productId) {
       throw new HttpsError("invalid-argument", "platform/productId는 필수입니다.");
     }
-    if (!PREMIUM_PRODUCT_IDS.includes(productId)) {
+    const allowedProductIds = allowedProductIdsForPlatform(platform);
+    if (!allowedProductIds.includes(productId)) {
       throw new HttpsError("permission-denied", "허용되지 않은 상품입니다.");
     }
 

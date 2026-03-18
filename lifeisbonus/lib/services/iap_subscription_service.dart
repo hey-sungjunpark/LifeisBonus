@@ -25,8 +25,18 @@ class IapSubscriptionService {
 
   static final IapSubscriptionService instance = IapSubscriptionService._();
 
-  static const String productId = String.fromEnvironment(
+  static const String _legacyProductId = String.fromEnvironment(
     'PREMIUM_SUBSCRIPTION_PRODUCT_ID',
+    defaultValue: '',
+  );
+
+  static const String _androidProductId = String.fromEnvironment(
+    'ANDROID_PREMIUM_SUBSCRIPTION_PRODUCT_ID',
+    defaultValue: 'lifeisbonus_premium_monthly',
+  );
+
+  static const String _iosProductId = String.fromEnvironment(
+    'IOS_PREMIUM_SUBSCRIPTION_PRODUCT_ID',
     defaultValue: 'lifeisbonus_premium_monthly_9900',
   );
 
@@ -49,6 +59,13 @@ class IapSubscriptionService {
 
   Stream<IapEvent> get events => _eventController.stream;
   bool get storeAvailable => _storeAvailable;
+
+  static String get productId {
+    if (Platform.isIOS) {
+      return _iosProductId;
+    }
+    return _legacyProductId.isNotEmpty ? _legacyProductId : _androidProductId;
+  }
 
   Future<void> initialize() async {
     if (_initialized) {
@@ -79,7 +96,7 @@ class IapSubscriptionService {
       throw Exception(_mapIapError(response.error));
     }
     if (response.productDetails.isEmpty) {
-      throw Exception('스토어에서 구독 상품을 찾지 못했습니다.');
+      throw Exception(_buildMissingProductMessage(response));
     }
     return response.productDetails;
   }
@@ -252,6 +269,18 @@ class IapSubscriptionService {
       return error.toString().replaceFirst('Exception: ', '');
     }
     return error.toString();
+  }
+
+  String _buildMissingProductMessage(ProductDetailsResponse response) {
+    final missingIds =
+        response.notFoundIDs.isEmpty ? <String>[productId] : response.notFoundIDs;
+    final missingLabel = missingIds.join(', ');
+    if (Platform.isAndroid) {
+      return '스토어에서 구독 상품을 찾지 못했습니다. 상품 ID: $missingLabel. '
+          'Play Console의 구독 ID, 활성 base plan, 테스트 계정, '
+          '설치 경로(내부 테스트 또는 라이선스 테스터)를 확인해 주세요.';
+    }
+    return '스토어에서 구독 상품을 찾지 못했습니다. 상품 ID: $missingLabel';
   }
 
   Future<void> dispose() async {

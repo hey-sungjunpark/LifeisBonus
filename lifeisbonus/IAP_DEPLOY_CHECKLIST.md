@@ -1,22 +1,24 @@
 # 인앱구독 배포 체크리스트 (월 9,900원)
 
 ## 1) 스토어 상품 준비
-- `PREMIUM_SUBSCRIPTION_PRODUCT_ID`를 iOS/Android 모두 동일하게 맞춥니다.
-- 기본값: `lifeisbonus_premium_monthly_9900`
+- Android 구독 ID: `lifeisbonus_premium_monthly`
+- iOS 구독 ID: `lifeisbonus_premium_monthly_9900`
 - App Store Connect / Play Console에서 구독 상품을 생성하고 활성화합니다.
 
 ## 2) Flutter 실행 시 환경변수
 ```bash
 cd /Users/sungjunpark/Project_LifeIsBonus_260112/lifeisbonus
 flutter run \
-  --dart-define=PREMIUM_SUBSCRIPTION_PRODUCT_ID=lifeisbonus_premium_monthly_9900 \
+  --dart-define=ANDROID_PREMIUM_SUBSCRIPTION_PRODUCT_ID=lifeisbonus_premium_monthly \
+  --dart-define=IOS_PREMIUM_SUBSCRIPTION_PRODUCT_ID=lifeisbonus_premium_monthly_9900 \
   --dart-define=ANDROID_PACKAGE_NAME=com.lifeisbonus.app \
   --dart-define=IOS_BUNDLE_ID=com.lifeisbonus.app
 ```
 
 ## 3) Functions 환경변수 준비
 - `APPLE_SHARED_SECRET`: App Store Connect Shared Secret
-- `PREMIUM_PRODUCT_IDS`: 허용할 상품 ID 목록(쉼표 구분)
+- `ANDROID_PREMIUM_PRODUCT_IDS`: Android 허용 상품 ID 목록(쉼표 구분)
+- `IOS_PREMIUM_PRODUCT_IDS`: iOS 허용 상품 ID 목록(쉼표 구분)
 - `ANDROID_PACKAGE_NAME`: 안드로이드 패키지명
 
 ## 4) Functions 배포
@@ -30,7 +32,8 @@ npm install
 ```bash
 cd /Users/sungjunpark/Project_LifeIsBonus_260112/lifeisbonus
 
-PREMIUM_PRODUCT_IDS=lifeisbonus_premium_monthly_9900 \
+ANDROID_PREMIUM_PRODUCT_IDS=lifeisbonus_premium_monthly \
+IOS_PREMIUM_PRODUCT_IDS=lifeisbonus_premium_monthly_9900 \
 ANDROID_PACKAGE_NAME=com.lifeisbonus.app \
 APPLE_SHARED_SECRET=YOUR_APPLE_SHARED_SECRET \
 firebase deploy --only functions:verifyPremiumPurchase
